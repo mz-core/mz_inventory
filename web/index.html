@@ -1,0 +1,311 @@
+<!doctype html>
+<html
+  lang="pt-BR"
+  class="nui-closed"
+  style="background: transparent !important; background-color: transparent !important; background-image: none !important"
+>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>mz_inventory</title>
+    <style>
+      html,
+      body,
+      #app,
+      .app,
+      .shell,
+      .workspace {
+        background: transparent !important;
+        background-color: transparent !important;
+        background-image: none !important;
+      }
+
+      html::before,
+      html::after,
+      body::before,
+      body::after,
+      #app::before,
+      #app::after,
+      .app::before,
+      .app::after {
+        content: none !important;
+        display: none !important;
+      }
+    </style>
+    <link rel="stylesheet" href="style.css?v=20261011inventorysubmenu1" />
+  </head>
+  <body
+    class="nui-closed"
+    style="background: transparent !important; background-color: transparent !important; background-image: none !important"
+  >
+    <div id="app" class="app is-hidden">
+      <div class="world-scrim" aria-hidden="true"></div>
+      <div class="shell">
+        <div id="nui-build-badge" class="nui-build-badge is-hidden" aria-live="polite"></div>
+        <div class="screen-meta" aria-hidden="true">
+          <h1 id="view-title">Inventario</h1>
+          <p id="view-subtitle">Player inventory</p>
+        </div>
+
+        <section class="notice-stack">
+          <div
+            id="error-banner"
+            class="error-banner is-hidden"
+            aria-live="polite"
+          ></div>
+          <div
+            id="action-banner"
+            class="action-banner is-hidden"
+            aria-live="polite"
+          ></div>
+        </section>
+
+        <main id="workspace" class="workspace" data-has-target="false">
+          <aside class="hotbar-rail" aria-label="Hotbar">
+            <section class="hotbar-panel">
+              <div class="hotbar-header">
+                <p class="pane-label">Hotbar</p>
+                <span>5-9</span>
+              </div>
+              <div id="hotbar-grid" class="hotbar-grid"></div>
+            </section>
+          </aside>
+
+          <section class="inventory-pane player-pane">
+            <div class="pane-frame">
+              <div class="pane-header">
+                <div class="pane-heading">
+                  <p class="pane-label">Inventario</p>
+                  <h2 id="player-name">Mochila</h2>
+                </div>
+                <div id="player-stats" class="pane-stats"></div>
+              </div>
+
+              <div id="player-grid" class="slot-grid"></div>
+
+              <aside id="player-summary" class="player-summary" aria-label="Resumo financeiro do jogador">
+                <div class="player-summary-identity">
+                  <span id="player-summary-monogram" class="player-summary-monogram" aria-hidden="true">--</span>
+                  <div>
+                    <small>PERSONAGEM</small>
+                    <strong id="player-summary-name">Jogador</strong>
+                  </div>
+                </div>
+                <div class="player-summary-metrics">
+                  <div class="player-summary-balance">
+                    <span>Carteira</span>
+                    <strong id="player-summary-wallet">R$ 0</strong>
+                  </div>
+                  <div class="player-summary-balance">
+                    <span>Banco</span>
+                    <strong id="player-summary-bank">R$ 0</strong>
+                  </div>
+                  <div class="player-summary-balance player-summary-citizen">
+                    <span>Citizen ID</span>
+                    <strong id="player-summary-citizenid">--</strong>
+                  </div>
+                </div>
+              </aside>
+            </div>
+          </section>
+
+          <section class="equipment-pane" aria-label="Equipamentos vestidos">
+            <div class="paper-doll" aria-hidden="true"></div>
+            <div id="weapon-equipment-grid" class="weapon-equipment-grid" aria-label="Armas equipadas"></div>
+            <div id="equipment-grid" class="equipment-grid"></div>
+          </section>
+
+          <aside class="right-region" aria-label="Container e contexto do item">
+            <section id="target-pane" class="inventory-pane target-pane">
+              <div class="pane-frame">
+                <div class="pane-header">
+                  <div class="pane-heading">
+                    <p class="pane-label">Container</p>
+                    <h2 id="target-name">Drop</h2>
+                  </div>
+                  <div id="target-stats" class="pane-stats"></div>
+                </div>
+
+                <div id="target-grid" class="slot-grid"></div>
+                <div id="target-equipment-section" class="target-equipment-section is-hidden">
+                  <div class="pane-header">
+                    <div class="pane-heading"><p class="pane-label">Equipamento</p>
+                      <h2 id="target-equipment-name">Equipamento do alvo</h2></div>
+                    <div id="target-equipment-stats" class="pane-stats"></div>
+                  </div>
+                  <div id="target-equipment-grid" class="slot-grid"></div>
+                </div>
+              </div>
+            </section>
+
+            <aside id="action-rail" class="action-rail" aria-hidden="true">
+              <section class="rail-card selection-card">
+              <div class="rail-card-header">
+                <div>
+                  <p class="pane-label">Contexto</p>
+                  <h2 id="selection-title">Nenhum item selecionado</h2>
+                </div>
+                <div id="selection-subtitle" class="selection-subtitle"></div>
+              </div>
+
+              <div id="selection-details" class="selection-details">
+                <div class="selection-empty">Nenhum item selecionado</div>
+              </div>
+
+              <div class="selection-actions">
+                <button id="use-btn" class="toolbar-btn solid" type="button">
+                  Usar
+                </button>
+                <button id="equip-btn" class="toolbar-btn solid" type="button">
+                  Equipar
+                </button>
+                <button id="split-btn" class="toolbar-btn ghost" type="button">
+                  Dividir
+                </button>
+                <button id="drop-btn" class="toolbar-btn ghost" type="button">
+                  Largar no chao
+                </button>
+                <button id="give-btn" class="toolbar-btn ghost" type="button">
+                  Entregar ao proximo
+                </button>
+                <button
+                  id="shortcut-btn"
+                  class="toolbar-btn ghost"
+                  type="button"
+                >
+                  Atalho
+                </button>
+                <div
+                  id="shortcut-picker"
+                  class="shortcut-picker is-hidden"
+                  aria-hidden="true"
+                >
+                  <button type="button" data-hotbar-slot="5">5</button>
+                  <button type="button" data-hotbar-slot="6">6</button>
+                  <button type="button" data-hotbar-slot="7">7</button>
+                  <button type="button" data-hotbar-slot="8">8</button>
+                  <button type="button" data-hotbar-slot="9">9</button>
+                </div>
+                <button
+                  id="cancel-selection-btn"
+                  class="toolbar-btn ghost"
+                  type="button"
+                >
+                  Limpar seleção
+                </button>
+                <button
+                  id="cancel-split-btn"
+                  class="toolbar-btn ghost is-hidden"
+                  type="button"
+                >
+                  Cancelar split
+                </button>
+              </div>
+              </section>
+            </aside>
+          </aside>
+        </main>
+
+        <div
+          id="item-tooltip"
+          class="item-tooltip is-hidden"
+          aria-hidden="true"
+        ></div>
+
+        <div id="drag-ghost" class="drag-ghost is-hidden" aria-hidden="true">
+          <div class="drag-ghost-icon">
+            <img class="drag-ghost-image is-hidden" alt="" />
+            <span id="drag-ghost-fallback" class="drag-ghost-fallback">--</span>
+          </div>
+          <div class="drag-ghost-copy">
+            <strong id="drag-ghost-label">Item</strong>
+            <span id="drag-ghost-amount">x1</span>
+          </div>
+        </div>
+
+        <div id="split-modal" class="modal-shell is-hidden" aria-hidden="true">
+          <div class="modal-card">
+            <div class="modal-header">
+              <div>
+                <p class="pane-label">Dividir</p>
+                <h2 id="split-modal-title">Dividir item</h2>
+              </div>
+              <button
+                id="split-modal-close-btn"
+                class="toolbar-btn ghost"
+                type="button"
+              >
+                Fechar
+              </button>
+            </div>
+
+            <p id="split-modal-subtitle" class="subtitle">
+              Escolha a quantidade para separar.
+            </p>
+
+            <div class="modal-controls">
+              <input id="split-range" type="range" min="1" max="1" value="1" />
+              <div class="split-input-row">
+                <label for="split-amount-input">Quantidade</label>
+                <input
+                  id="split-amount-input"
+                  type="number"
+                  min="1"
+                  max="1"
+                  value="1"
+                />
+              </div>
+            </div>
+
+            <div class="selection-actions">
+              <button
+                id="split-confirm-btn"
+                class="toolbar-btn solid"
+                type="button"
+              >
+                Confirmar
+              </button>
+              <button
+                id="split-cancel-btn"
+                class="toolbar-btn ghost"
+                type="button"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div id="slot-menu" class="slot-menu is-hidden" aria-hidden="true">
+          <button id="menu-select-btn" class="slot-menu-btn" type="button">
+            Selecionar
+          </button>
+          <button id="menu-use-btn" class="slot-menu-btn" type="button">
+            Usar
+          </button>
+          <button id="menu-split-btn" class="slot-menu-btn" type="button">
+            Dividir
+          </button>
+          <button id="menu-drop-btn" class="slot-menu-btn" type="button">
+            Largar no chao
+          </button>
+          <button id="menu-give-btn" class="slot-menu-btn" type="button">
+            Entregar ao proximo
+          </button>
+          <button id="menu-third-party-btn" class="slot-menu-btn is-hidden" type="button">
+            Retirar
+          </button>
+          <button
+            id="menu-cancel-btn"
+            class="slot-menu-btn danger"
+            type="button"
+          >
+            Fechar
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script src="script.js?v=20261011inventorysubmenu1"></script>
+  </body>
+</html>
