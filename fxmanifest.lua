@@ -5,7 +5,7 @@ lua54 'yes'
 name 'mz_inventory'
 author 'Mazus'
 description 'Canonical Inventory domain resource'
-version '1.0.0'
+version '1.0.2'
 
 shared_scripts {
   '@ox_lib/init.lua',
