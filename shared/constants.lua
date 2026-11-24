@@ -6,6 +6,7 @@ MZConstants.StateBags = {
 MZConstants.InventoryTypes = {
   MAIN = 'main',
   EQUIPMENT = 'equipment',
+  BACKPACK = 'backpack',
   PERSONAL_STASH = 'personal_stash',
   STASH = 'stash',
   TRUNK = 'trunk',

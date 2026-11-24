@@ -2,6 +2,10 @@ exports('GetPlayerInventory', function(source)
   return MZInventoryService.getPlayerInventory(source)
 end)
 
+exports('MigrateLegacyBackpackSlots', function(source)
+  return MZInventoryService.migrateLegacyBackpackSlots(source)
+end)
+
 exports('GetPlayerInventoryWeight', function(source)
   return MZInventoryService.getPlayerWeight(source)
 end)

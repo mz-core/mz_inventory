@@ -1,3 +1,4 @@
+-- Opcional: grid = { width = 2, height = 2 }; sem grid o item ocupa 1x1.
 MZItems = {
   clothing_garment = {
     image = 'clothing_garment.png',
@@ -16,6 +17,7 @@ MZItems = {
   notebook = {
     image = 'notebook.png',
     label = 'Notebook',
+    grid = { width = 2, height = 2 },
     weight = 2200,
     stack = false,
     unique = true,
@@ -28,6 +30,7 @@ MZItems = {
   water = {
     image = 'water.png',
     label = 'Água',
+    grid = { width = 1, height = 1 },
     weight = 500,
     stack = true,
     unique = false,
@@ -97,6 +100,18 @@ MZItems = {
     closeOnUse = false,
     bindOnReceive = true,
     generateSerial = true
+  },
+
+  tablet = {
+    image = 'tablet.png',
+    label = 'Tablet',
+    weight = 1000,
+    stack = false,
+    unique = true,
+    usable = true,
+    closeOnUse = false,
+    bindOnReceive = false,
+    generateSerial = false
   },
 
   id_card = {
@@ -202,6 +217,7 @@ MZItems = {
   weapon_carbinerifle = {
     image = 'weapon_carbinerifle.png',
     label = 'Fuzil',
+    grid = { width = 3, height = 2 },
     type = 'weapon',
     equipment = true,
     weaponCategory = 'primary',
@@ -476,13 +492,13 @@ MZItems = {
   -- Chave fisica vinculada a um par de algemas. O vinculo e criado no servidor
   -- em metadata imutavel; a NUI nunca define handcuff_uid.
   handcuff_key = {
-    image = 'handcuffs.png',
+    image = 'labkey.png',
     label = 'Chave de algemas',
     weight = 20,
     stack = false,
     unique = true,
-    usable = false,
-    closeOnUse = false,
+    usable = true,
+    closeOnUse = true,
     bindOnReceive = false,
     generateSerial = true
   }

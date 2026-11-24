@@ -107,7 +107,10 @@ function MZEquipment.getBackpackBonus(row)
       break
     end
   end
-  configured = configured or {}
+  if not configured and MZEquipment.canEnter(row, itemDefinition, expected.slot) then
+    configured = capacities[normalizedId(inventoryConfig().backpackDefaultCapacity)]
+  end
+  configured = type(configured) == 'table' and configured or {}
   return {
     extraSlots = math.max(0, math.floor(tonumber(configured.extraSlots) or 0)),
     extraWeight = math.max(0, math.floor(tonumber(configured.extraWeight) or 0))
@@ -116,16 +119,15 @@ end
 
 function MZEquipment.getPlayerCapacity(backpackRow)
   local config = inventoryConfig()
-  local bonus = MZEquipment.getBackpackBonus(backpackRow)
   local baseSlots = math.max(1, math.floor(tonumber(config.defaultSlots) or 40))
   local baseWeight = math.max(0, math.floor(tonumber(config.defaultWeight) or 50000))
   return {
     baseSlots = baseSlots,
     baseWeight = baseWeight,
-    extraSlots = bonus.extraSlots,
-    extraWeight = bonus.extraWeight,
-    maxSlots = baseSlots + bonus.extraSlots,
-    maxWeight = baseWeight + bonus.extraWeight
+    extraSlots = 0,
+    extraWeight = 0,
+    maxSlots = baseSlots,
+    maxWeight = baseWeight
   }
 end
 

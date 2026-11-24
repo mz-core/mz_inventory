@@ -1,6 +1,6 @@
 MZInventoryOwnerContract = {}
 
-MZInventoryOwnerContract.VERSION = '2.0.0'
+MZInventoryOwnerContract.VERSION = '2.1.0'
 
 local OWNER_TYPES = {
   character = true,
@@ -8,6 +8,7 @@ local OWNER_TYPES = {
   property = true,
   organization = true,
   world_drop = true,
+  item_instance = true,
   temporary = true
 }
 
@@ -69,6 +70,10 @@ function MZInventoryOwnerContract.normalize(descriptor)
   if ownerType == 'character' then
     if ownerId:lower():sub(1, 9) == 'personal:' then return nil, 'invalid_character_owner' end
     if #ownerId > 64 then return nil, 'invalid_character_owner' end
+  end
+  if ownerType == 'item_instance' then
+    if #ownerId > 64 or not ownerId:match('^[%w:_-]+$') then return nil, 'invalid_item_instance_owner' end
+    if inventoryType ~= 'backpack' then return nil, 'invalid_item_instance_container' end
   end
 
   return {

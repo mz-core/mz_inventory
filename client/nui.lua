@@ -288,7 +288,7 @@ RegisterNUICallback('bindHotbarSlot', function(data, cb)
     return
   end
 
-  local ok, resultOrErr = MZInventoryBridge.bindHotbarSlot(inventorySlot, hotbarSlot)
+  local ok, resultOrErr = MZInventoryBridge.bindHotbarSlot(inventorySlot, hotbarSlot, data and data.container)
   if ok and MZInventoryNUI and MZInventoryNUI.renderSession then
     MZInventoryNUI.renderSession()
   end
@@ -355,7 +355,8 @@ RegisterNUICallback('moveItem', function(data, cb)
     data and data.from_slot,
     data and data.to_container,
     data and data.to_slot,
-    data and data.amount
+    data and data.amount,
+    data and data.rotated
   )
 
   cb({

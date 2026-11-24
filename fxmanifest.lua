@@ -23,6 +23,7 @@ server_scripts {
   'server/schema.lua',
   'server/repository.lua',
   'server/world_repository.lua',
+  'server/grid.lua',
   'server/service.lua',
   'server/money.lua',
   'server/police_access.lua',
@@ -39,8 +40,10 @@ client_scripts {
   'client/nui.lua',
   'client/third_party.lua',
   'client/exports.lua',
+  'client/drops.lua',
   'client/main.lua',
   'client/target.lua',
+  'client/interact.lua',
   'client/weapons.lua'
 }
 
@@ -51,6 +54,7 @@ files {
   'web/index.html',
   'web/style.css',
   'web/script.js',
+  'web/assets/fonts/*',
   'web/assets/icons/equipment/*.svg',
   'locales/*.json'
 }

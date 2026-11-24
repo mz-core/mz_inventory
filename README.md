@@ -127,6 +127,14 @@ Para atualizar com segurança:
 
 O `mz_inventory` permanece responsável pelas operações e validações do inventário. Outros resources consomem seus **exports e contratos autorizados**, sem assumir a escrita direta dos dados de itens.
 
+O atalho de um item da mochila guarda também o UID da mochila em `mz_player_hotbar.backpack_uid`; o schema acrescenta essa coluna quando necessário. O atalho permanece indisponível enquanto essa mochila não estiver equipada. Armas, munições e dinheiro mantêm as restrições existentes.
+
+Uma mochila largada usa o drop existente. No `mz_interact`, E abre uma lista para acessar o conteúdo ou o item no chão; no `mz_target`, as opções de abrir a mochila e abrir o drop ficam disponíveis. O servidor valida distância, dimensão e a presença da mesma mochila antes de cada transferência.
+
+No porta-malas de veículos, E abre uma lista quando a entrada física e o armazenamento estão disponíveis. Nos veículos sem entrada física, E abre o armazenamento diretamente.
+
+A migração de slots extras está disponível somente no servidor por `exports['mz_inventory']:MigrateLegacyBackpackSlots(source)`. Ela não é executada automaticamente: a integração deve ocorrer quando o inventário puder apresentar e operar o conteúdo da mochila. Em caso de falta de espaço, peso excedido, dinheiro ou outra mochila nos slots extras, retorna erro sem migrar itens.
+
 Alguns fluxos dependem de integrações específicas, como dinheiro representado por itens via `mz_economy` e acesso de terceiros mediado por `mz_police`. Essas integrações devem respeitar permissões, ordem de inicialização, sessões e validações no servidor.
 
 Para testes administrativos, há comandos como `minv_give`, `minv_take` e `minv_has`. Seu uso por jogadores é restrito pela permissão ACE `mzcore.inventory.manage` nos caminhos correspondentes.

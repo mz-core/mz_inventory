@@ -24,6 +24,10 @@ const els = {
   playerName: document.getElementById("player-name"),
   playerStats: document.getElementById("player-stats"),
   playerGrid: document.getElementById("player-grid"),
+  backpackSection: document.getElementById("backpack-section"),
+  backpackName: document.getElementById("backpack-name"),
+  backpackStats: document.getElementById("backpack-stats"),
+  backpackGrid: document.getElementById("backpack-grid"),
   equipmentGrid: document.getElementById("equipment-grid"),
   weaponEquipmentGrid: document.getElementById("weapon-equipment-grid"),
   playerSummaryName: document.getElementById("player-summary-name"),
@@ -32,6 +36,7 @@ const els = {
   playerSummaryBank: document.getElementById("player-summary-bank"),
   playerSummaryCitizenId: document.getElementById("player-summary-citizenid"),
   targetPane: document.getElementById("target-pane"),
+  targetLabel: document.getElementById("target-label"),
   targetName: document.getElementById("target-name"),
   targetStats: document.getElementById("target-stats"),
   targetGrid: document.getElementById("target-grid"),
@@ -464,12 +469,13 @@ function isBusy() {
 }
 
 function formatWeight(weight) {
-  const value = Number(weight || 0);
+  const parsed = Number(weight || 0);
+  const value = Number.isFinite(parsed) ? parsed : 0;
   if (value >= 1000) {
-    return `${(value / 1000).toFixed(value % 1000 === 0 ? 0 : 1)} kg`;
+    return `${Number((value / 1000).toFixed(2))} kg`;
   }
 
-  return `${value} g`;
+  return `${Number(value.toFixed(2))} g`;
 }
 
 function getWeightTone(percentage) {
@@ -777,12 +783,13 @@ function getContainerTitle(snapshot, fallback) {
   const dropUid = String(container.drop_uid || "").trim();
 
   const knownLabels = {
-    player_main: "Inventario principal",
+    player_main: "Bolsos",
+    backpack: "Mochila",
     vehicle_trunk: "Porta-malas",
     vehicle_glovebox: "Porta-luvas",
     personal_stash: "Bau pessoal",
     org_stash: "Bau da organizacao",
-    world_drop: "Drop no mundo",
+    world_drop: "Chão",
   };
 
   if (label && knownLabels[label]) {
@@ -1020,6 +1027,10 @@ function buildSelectionDebug(selected, item) {
 }
 
 function getContainerDescriptor(containerKey) {
+  if (containerKey === "backpack") {
+    const uid = getSnapshot("backpack")?.container?.owner_id;
+    return uid ? { type: "backpack", instance_uid: uid } : null;
+  }
   if (containerKey === "player") {
     return state.session.context.player || { type: "player" };
   }
@@ -1234,7 +1245,7 @@ function canBindSelectedSlotToHotbar(slotData, containerKey) {
     slotData.occupied === true &&
     slotData.usable === true &&
     slotData.type !== "weapon" &&
-    String(containerKey || "") === "player"
+    (String(containerKey || "") === "player" || (String(containerKey || "") === "backpack" && slotData.type !== "ammo"))
   );
 }
 
@@ -1404,6 +1415,108 @@ function normalizeSlots(snapshot, fallbackSlots) {
   });
 }
 
+function syncGridCellSize(grid) {
+  const bounds = grid.getBoundingClientRect();
+  if (!bounds.width) return;
+  const style = getComputedStyle(grid);
+  const padding = (parseFloat(style.paddingLeft) || 0) + (parseFloat(style.paddingRight) || 0);
+  const borders = (parseFloat(style.borderLeftWidth) || 0) + (parseFloat(style.borderRightWidth) || 0);
+  const gap = parseFloat(style.columnGap) || 0;
+  const columns = Number(grid.dataset.columns) || 8;
+  const cell = (bounds.width - borders - padding - gap * (columns - 1)) / columns;
+  if (cell > 0) {
+    const value = `${cell}px`;
+    if (grid.style.getPropertyValue("--inv-grid-cell") !== value) grid.style.setProperty("--inv-grid-cell", value);
+  }
+}
+
+const storageGrids = Array.from(document.querySelectorAll(".slot-grid"));
+function alignContextPanel() {
+  if (!els.actionRail || !els.backpackSection || !els.targetPane || !els.playerGrid || !els.targetGrid) return;
+  const pocketHeight = els.playerGrid.getBoundingClientRect().height;
+  if (pocketHeight) els.targetGrid.style.setProperty("--target-grid-height", `${pocketHeight}px`);
+  if (els.backpackSection.classList.contains("is-hidden")) {
+    els.actionRail.style.removeProperty("--context-offset");
+    els.actionRail.style.removeProperty("--context-height");
+    return;
+  }
+  els.actionRail.style.setProperty("--context-height", `${els.backpackSection.getBoundingClientRect().height}px`);
+  const gap = parseFloat(getComputedStyle(els.actionRail.parentElement).rowGap) || 0;
+  const offset = els.backpackSection.getBoundingClientRect().top - els.targetPane.getBoundingClientRect().bottom - gap;
+  els.actionRail.style.setProperty("--context-offset", `${Math.max(0, offset)}px`);
+}
+if (typeof ResizeObserver !== "undefined") {
+  const gridObserver = new ResizeObserver((entries) => entries.forEach((entry) => syncGridCellSize(entry.target)));
+  storageGrids.forEach((grid) => gridObserver.observe(grid));
+  const alignmentObserver = new ResizeObserver(alignContextPanel);
+  [els.backpackSection, els.targetPane, els.playerGrid].forEach((element) => element && alignmentObserver.observe(element));
+}
+window.addEventListener("resize", () => { storageGrids.forEach(syncGridCellSize); alignContextPanel(); });
+
+function spatialDimensions(slot, rotated = slot?.metadata?.grid_rotated === true) {
+  const width = Math.max(1, Math.floor(Number(slot?.grid?.width) || 1));
+  const height = Math.max(1, Math.floor(Number(slot?.grid?.height) || 1));
+  return rotated ? [height, width] : [width, height];
+}
+
+function gridColumns(snapshot) {
+  return Math.max(1, Math.floor(Number(snapshot?.container?.grid_columns || state.session.snapshots.player?.container?.grid_columns) || 8));
+}
+
+function setGridColumns(grid, columns) {
+  grid.dataset.columns = String(columns);
+  grid.style.setProperty('--inv-grid-columns', String(columns));
+}
+
+function spatialCells(slot, width, height, max, columns) {
+  if (slot < 1 || (slot - 1) % columns + width > columns) return null;
+  const cells = [];
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const cell = slot + x + y * columns;
+    if (cell > max) return null;
+    cells.push(cell);
+  }
+  return cells;
+}
+
+function spatialPreview(containerKey, slot, item, rotated) {
+  const snapshot = getSnapshot(containerKey);
+  if (!snapshot) return null;
+  const max = Number(snapshot.container?.max_slots || 0);
+  const columns = gridColumns(snapshot);
+  const [width, height] = spatialDimensions(item, rotated);
+  const cells = spatialCells(slot, width, height, max, columns);
+  if (!cells) return { width, height, valid: false };
+  const drag = getDragState();
+  const rows = normalizeSlots(snapshot, 0).filter((row) => row.occupied &&
+    !(containerKey === drag.container && Number(row.slot) === Number(drag.slot)));
+  const target = rows.find((row) => Number(row.slot) === slot);
+  if (target && canLikelyMergeSlots(item, target)) return { width, height, valid: true };
+  const occupied = new Set();
+  rows.filter((row) => row !== target).forEach((row) => {
+    const [w, h] = spatialDimensions(row);
+    (spatialCells(Number(row.slot), w, h, max, columns) || []).forEach((cell) => occupied.add(cell));
+  });
+  let valid = cells.every((cell) => !occupied.has(cell));
+  if (target) {
+    const sourceSnapshot = getSnapshot(drag.container);
+    const sourceMax = Number(sourceSnapshot?.container?.max_slots || 0);
+    const [w, h] = spatialDimensions(target);
+    const sourceColumns = gridColumns(sourceSnapshot);
+    const swapped = spatialCells(Number(drag.slot), w, h, sourceMax, sourceColumns);
+    const sourceRows = normalizeSlots(sourceSnapshot, 0).filter((row) => row.occupied &&
+      Number(row.slot) !== Number(drag.slot) && !(drag.container === containerKey && Number(row.slot) === slot));
+    const sourceOccupied = new Set();
+    sourceRows.forEach((row) => {
+      const [rw, rh] = spatialDimensions(row);
+      (spatialCells(Number(row.slot), rw, rh, sourceMax, sourceColumns) || []).forEach((cell) => sourceOccupied.add(cell));
+    });
+    if (drag.container === containerKey) cells.forEach((cell) => sourceOccupied.add(cell));
+    valid = valid && !!swapped && swapped.every((cell) => !sourceOccupied.has(cell));
+  }
+  return { width, height, valid };
+}
+
 function renderContainer(
   gridEl,
   titleEl,
@@ -1413,6 +1526,8 @@ function renderContainer(
   containerKey,
 ) {
   const container = snapshot && snapshot.container ? snapshot.container : {};
+  const columns = gridColumns(snapshot);
+  setGridColumns(gridEl, columns);
   const slotCount = Number(container.slot_count || 0);
   const maxSlots = Number(container.max_slots || 0);
   const currentWeight = Number(container.current_weight || 0);
@@ -1437,15 +1552,51 @@ function renderContainer(
 
   const baseSlots = Number(container.base_slots || 0);
   const extraSlots = Number(container.backpack_extra_slots || 0);
-  normalizeSlots(snapshot, containerKey === "player" ? 30 : 0).forEach((slot) => {
+  const slots = normalizeSlots(snapshot, containerKey === "player" ? 30 : 0);
+  const previewTarget = state.dragUi.dropTarget;
+  const drag = getDragState();
+  const showPreview = previewTarget?.container === containerKey && drag.active &&
+    spatialDimensions(drag.item).some((n) => n > 1);
+  const spatial = showPreview || slots.some((slot) => slot.occupied && spatialDimensions(slot).some((n) => n > 1));
+  gridEl.classList.toggle("spatial-grid", spatial);
+  const covered = new Set();
+  if (spatial) slots.filter((slot) => slot.occupied).forEach((slot) => {
+    const [width, height] = spatialDimensions(slot);
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      if (x || y) covered.add(Number(slot.slot) + x + y * columns);
+    }
+  });
+  slots.forEach((slot) => {
     if (containerKey === "player" && extraSlots > 0 && Number(slot.slot) === baseSlots + 1) {
       const divider = document.createElement("div");
       divider.className = "backpack-divider";
       divider.innerHTML = `<span>MOCHILA</span><strong>+${extraSlots} slots</strong>`;
       gridEl.appendChild(divider);
     }
-    gridEl.appendChild(buildSlotCard(slot, containerKey));
+    const card = buildSlotCard(slot, containerKey);
+    if (spatial) {
+      const number = Number(slot.slot);
+      const [width, height] = slot.occupied ? spatialDimensions(slot) : [1, 1];
+      card.style.gridColumn = `${(number - 1) % columns + 1} / span ${width}`;
+      card.style.gridRow = `${Math.floor((number - 1) / columns) + 1} / span ${height}`;
+      if (slot.occupied && (width > 1 || height > 1)) card.classList.add("spatial-item");
+      if (!slot.occupied && covered.has(number)) card.classList.add("spatial-covered");
+    }
+    gridEl.appendChild(card);
   });
+  if (showPreview) {
+    const preview = spatialPreview(containerKey, Number(previewTarget.slot), drag.item, state.dragUi.rotated);
+    if (preview) {
+      const mark = document.createElement("div");
+      mark.className = `spatial-preview ${preview.valid ? "valid" : "invalid"}`;
+      const column = (previewTarget.slot - 1) % columns;
+      const row = Math.floor((previewTarget.slot - 1) / columns);
+      mark.style.gridColumn = `${column + 1} / span ${Math.min(preview.width, columns - column)}`;
+      mark.style.gridRow = `${row + 1} / span ${Math.min(preview.height, Math.ceil(maxSlots / columns) - row)}`;
+      gridEl.appendChild(mark);
+    }
+  }
+  syncGridCellSize(gridEl);
 }
 
 function renderEquipment() {
@@ -1513,27 +1664,26 @@ function renderPlayerSummary() {
 }
 
 function renderDropPlaceholder() {
-  els.targetName.textContent = "Drop";
+  els.targetName.textContent = "Chão";
   els.targetStats.innerHTML = `
     <div class="pane-metrics">
       <div class="pane-metric-row">
-        <span>0/30 slots</span>
-        <span>Solte item aqui</span>
-      </div>
-      <div class="pane-weight-bar">
-        <div class="pane-weight-fill" style="width: 0%"></div>
+        <span>Arraste um item para largar</span>
       </div>
     </div>
   `;
   els.targetGrid.innerHTML = "";
+  const columns = gridColumns(state.session.snapshots.player);
+  setGridColumns(els.targetGrid, columns);
 
-  Array.from({ length: 30 }, (_, index) => ({
+  Array.from({ length: columns }, (_, index) => ({
     slot: index + 1,
     occupied: false,
     placeholder: true,
   })).forEach((slot) => {
     els.targetGrid.appendChild(buildSlotCard(slot, "target"));
   });
+  syncGridCellSize(els.targetGrid);
 }
 
 function renderError() {
@@ -1641,6 +1791,7 @@ function renderSelectionPanel() {
     els.actionRail.classList.toggle("has-selection", hasSelection);
     els.actionRail.classList.toggle("has-split", splitState.active === true);
     els.actionRail.setAttribute("aria-hidden", hasSelection ? "false" : "true");
+    els.actionRail.dataset.storageKind = selected && ["target", "targetEquipment"].includes(selected.container) ? "external" : "personal";
   }
 
   if (!hasSelection) {
@@ -1668,7 +1819,7 @@ function renderSelectionPanel() {
   }
 
   const item = selected.item;
-  const canUse = selected.container === "player" && item.usable === true;
+  const canUse = (selected.container === "player" || (selected.container === "backpack" && item.type !== "weapon" && item.type !== "ammo")) && item.usable === true;
   const canEquip = (item.type === "clothing" || item.type === "weapon") && (selected.container === "player" || selected.container === "equipment");
   const canSplit = !(state.session.thirdParty &&
     (selected.container === "target" || selected.container === "targetEquipment"))
@@ -1843,7 +1994,7 @@ function renderContextMenu() {
 
   const sameSelected = isSlotSelected(menu.container, menu.slot);
   const canEquip = (slotData.type === "clothing" || slotData.type === "weapon") && (menu.container === "player" || menu.container === "equipment");
-  const canUse = (menu.container === "player" && slotData.usable === true) || canEquip;
+  const canUse = ((menu.container === "player" || (menu.container === "backpack" && slotData.type !== "weapon" && slotData.type !== "ammo")) && slotData.usable === true) || canEquip;
   const thirdParty = state.session.thirdParty;
   const canSplit = !(thirdParty &&
     (menu.container === "target" || menu.container === "targetEquipment"))
@@ -2021,10 +2172,20 @@ function render() {
       "Inventario",
       "player",
     );
+    els.backpackSection.classList.toggle("is-hidden", !session.snapshots.backpack);
+    if (session.snapshots.backpack) {
+      renderContainer(els.backpackGrid, els.backpackName, els.backpackStats,
+        session.snapshots.backpack, "Mochila", "backpack");
+    }
     renderEquipment();
     renderPlayerSummary();
 
     if (session.snapshots.target) {
+      const targetType = String(session.context?.target?.type || session.snapshots.target.container?.type || '').toLowerCase();
+      const targetLabel = String(session.snapshots.target.container?.label || '').toLowerCase();
+      els.targetPane.dataset.storageKind = ['drop', 'ground_backpack', 'world_drop'].includes(targetType) || targetLabel === 'world_drop'
+        ? 'world' : 'container';
+      els.targetLabel.textContent = "Recipiente";
       if (els.workspace) {
         els.workspace.dataset.hasTarget = "true";
       }
@@ -2050,13 +2211,18 @@ function render() {
         }
       }
     } else {
+      els.targetPane.dataset.storageKind = 'world';
       if (els.workspace) {
         els.workspace.dataset.hasTarget = "false";
       }
-      els.targetPane.classList.add("is-hidden");
+      els.targetLabel.textContent = "No mundo";
+      els.targetPane.classList.remove("is-hidden");
+      els.targetEquipmentSection.classList.add("is-hidden");
+      renderDropPlaceholder();
     }
 
     renderSelectionPanel();
+    requestAnimationFrame(alignContextPanel);
     renderHotbar();
     renderSplitModal();
     renderContextMenu();
@@ -2082,6 +2248,7 @@ function render() {
 async function handleActionResponse(actionPromise, options = {}) {
   const response = await actionPromise;
   if (response === null) {
+    if (state.dragUi.source) { clearDragUi(); void postNui("clearDrag"); }
     setLocalError("Nao foi possivel comunicar com a interface do inventario.");
     return false;
   }
@@ -2092,6 +2259,7 @@ async function handleActionResponse(actionPromise, options = {}) {
     response.error &&
     response.error.message
   ) {
+    if (state.dragUi.source) { clearDragUi(); void postNui("clearDrag"); }
     setLocalError(String(response.error.message));
     return false;
   }
@@ -2131,6 +2299,15 @@ async function performResolvedOperation(
     return handleActionResponse(postNui("moveItem", {
       from_container: "target", from_slot: Number(fromSlot),
       to_container: "player", to_slot: Number(toSlot), amount: 1,
+    }), { resetTransient: true });
+  }
+  if (state.dragUi.source && spatialDimensions(sourceSlot).some((n) => n > 1)) {
+    return handleActionResponse(postNui("moveItem", {
+      from_container: fromContainer,
+      from_slot: Number(fromSlot),
+      to_container: toContainer,
+      to_slot: Number(toSlot),
+      rotated: state.dragUi.rotated === true,
     }), { resetTransient: true });
   }
   const operation = resolveSlotOperation(
@@ -2237,7 +2414,7 @@ async function handleDropSelected() {
   );
 }
 
-async function bindInventorySlotToHotbar(inventorySlot, hotbarSlot) {
+async function bindInventorySlotToHotbar(inventorySlot, hotbarSlot, container = "player") {
   const sourceSlot = Number(inventorySlot || 0);
   const targetSlot = Number(hotbarSlot || 0);
   if (!sourceSlot || !targetSlot) {
@@ -2249,6 +2426,7 @@ async function bindInventorySlotToHotbar(inventorySlot, hotbarSlot) {
     postNui("bindHotbarSlot", {
       inventorySlot: sourceSlot,
       hotbarSlot: targetSlot,
+      container,
     }),
     { resetTransient: true },
   );
@@ -2290,7 +2468,7 @@ async function bindSelectedSlotToHotbar(hotbarSlot) {
   }
 
   closeContextMenu();
-  return bindInventorySlotToHotbar(selected.slot, hotbarSlot);
+  return bindInventorySlotToHotbar(selected.slot, hotbarSlot, selected.container);
 }
 
 function openSplitModalFor(containerKey, slotNumber) {
@@ -2470,7 +2648,7 @@ async function handleContextMenuUse() {
     await handleToggleEquipment(menu.container, menu.slot, slotData);
     return;
   }
-  if (!slotData || menu.container !== "player" || slotData.usable !== true) {
+  if (!slotData || (menu.container !== "player" && menu.container !== "backpack") || slotData.usable !== true) {
     setLocalError("Este item nao pode ser usado por este menu.");
     return;
   }
@@ -2645,6 +2823,7 @@ function beginDrag(containerKey, slotNumber, clientX, clientY) {
     },
     pointerX: Number(clientX || 0),
     pointerY: Number(clientY || 0),
+    rotated: slotData.metadata?.grid_rotated === true,
   };
   state.session.selectedSlot = null;
 
@@ -2676,6 +2855,13 @@ function beginPointerDrag(containerKey, slotNumber, clientX, clientY) {
     startX: Number(clientX || 0),
     startY: Number(clientY || 0),
   };
+  const card = document.querySelector(`.slot-card[data-container="${containerKey}"][data-slot="${slotNumber}"]`);
+  if (card && spatialDimensions(slotData).some((n) => n > 1)) {
+    const rect = card.getBoundingClientRect();
+    const [width, height] = spatialDimensions(slotData);
+    state.dragUi.pending.anchorX = Math.min(width - 1, Math.max(0, Math.floor((clientX - rect.left) / (rect.width / width))));
+    state.dragUi.pending.anchorY = Math.min(height - 1, Math.max(0, Math.floor((clientY - rect.top) / (rect.height / height))));
+  }
 
   return true;
 }
@@ -2708,7 +2894,25 @@ function resolvePointDropTarget(clientX, clientY) {
   }
 
   const containerKey = String(card.dataset.container || "").trim();
-  const slotNumber = Number(card.dataset.slot || 0);
+  let slotNumber = Number(card.dataset.slot || 0);
+  const drag = getDragState();
+  const grid = card.closest(".slot-grid");
+  if (grid && drag.active && spatialDimensions(drag.item).some((n) => n > 1) &&
+      isContainerInteractive(containerKey)) {
+    const style = getComputedStyle(grid), rect = grid.getBoundingClientRect();
+    const gap = parseFloat(style.columnGap) || 0;
+    const rowGap = parseFloat(style.rowGap) || 0;
+    const left = parseFloat(style.paddingLeft) || 0, right = parseFloat(style.paddingRight) || 0;
+    const top = parseFloat(style.paddingTop) || 0;
+    const columns = gridColumns(getSnapshot(containerKey));
+    const cell = (grid.clientWidth - left - right - gap * (columns - 1)) / columns;
+    const [width, height] = spatialDimensions(drag.item, state.dragUi.rotated);
+    const x = Math.floor((clientX - rect.left - left) / (cell + gap)) - Math.min(state.dragUi.anchorX || 0, width - 1);
+    const y = Math.floor((clientY - rect.top - top + grid.scrollTop) / (cell + rowGap)) - Math.min(state.dragUi.anchorY || 0, height - 1);
+    if (x < 0 || x >= columns || y < 0) return null;
+    slotNumber = y * columns + x + 1;
+    if (slotNumber > Number(getSnapshot(containerKey)?.container?.max_slots || 0)) return null;
+  }
   if (!slotNumber) {
     return null;
   }
@@ -2749,6 +2953,9 @@ function maybePromotePendingDrag(clientX, clientY) {
   if (beginDrag(pending.container, pending.slot, clientX, clientY) !== true) {
     return false;
   }
+
+  state.dragUi.anchorX = pending.anchorX || 0;
+  state.dragUi.anchorY = pending.anchorY || 0;
 
   state.dragUi.suppressClick = true;
   return true;
@@ -2799,7 +3006,8 @@ function updateDropTarget(containerKey, slotNumber) {
   if (
     !slotNumber ||
     (dragState.container === containerKey &&
-      Number(dragState.slot || 0) === Number(slotNumber || 0))
+      Number(dragState.slot || 0) === Number(slotNumber || 0) &&
+      state.dragUi.rotated === (dragState.item?.metadata?.grid_rotated === true))
   ) {
     nextTarget = null;
   } else {
@@ -2834,14 +3042,14 @@ async function handleDropOperation(containerKey, slotNumber) {
   hideDragGhost();
 
   if (containerKey === "hotbar") {
-    if (dragState.container !== "player") {
+    if (dragState.container !== "player" && dragState.container !== "backpack") {
       setLocalError("Somente itens do inventario podem ser vinculados a hotbar.");
       clearDrag();
       return false;
     }
 
     state.dragUi.dropHandled = true;
-    return bindInventorySlotToHotbar(dragState.slot, slotNumber);
+    return bindInventorySlotToHotbar(dragState.slot, slotNumber, dragState.container);
   }
 
   if (isGroundDropPlaceholder(containerKey)) {
@@ -3048,7 +3256,7 @@ function findHotbarSlot(event) {
 
 function onHotbarDragOver(event) {
   const dragState = getDragState();
-  if (dragState.active !== true || dragState.container !== "player") {
+  if (dragState.active !== true || (dragState.container !== "player" && dragState.container !== "backpack")) {
     return;
   }
 
@@ -3065,7 +3273,7 @@ function onHotbarDragOver(event) {
 
 function onHotbarDrop(event) {
   const dragState = getDragState();
-  if (dragState.active !== true || dragState.container !== "player") {
+  if (dragState.active !== true || (dragState.container !== "player" && dragState.container !== "backpack")) {
     return;
   }
 
@@ -3333,6 +3541,7 @@ els.menuCancelBtn.addEventListener("click", () => {
 
 [
   ["player", els.playerGrid],
+  ["backpack", els.backpackGrid],
   ["equipment", els.equipmentGrid],
   ["equipment", els.weaponEquipmentGrid],
   ["target", els.targetGrid],
@@ -3407,6 +3616,14 @@ window.addEventListener("mouseup", (event) => {
 });
 
 window.addEventListener("keydown", (event) => {
+  if (event.key.toLowerCase() === "r" && state.dragUi.source &&
+      spatialDimensions(state.dragUi.source.item).some((n) => n > 1)) {
+    event.preventDefault();
+    state.dragUi.rotated = !state.dragUi.rotated;
+    updatePointerDragTarget(state.dragUi.pointerX, state.dragUi.pointerY);
+    render();
+    return;
+  }
   if (event.key !== "Escape") {
     return;
   }

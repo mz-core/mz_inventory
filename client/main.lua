@@ -127,6 +127,25 @@ RegisterNetEvent('mz_inventory:client:equipmentChanged', function(payload)
   end
 end)
 
+AddEventHandler('mz_inventory:client:worldDropRemoved', function(dropUid)
+  local target = MZInventoryState.session.context.target
+  if MZInventoryState.isOpen() and type(target) == 'table'
+    and (target.type == 'ground_backpack' or target.type == 'drop')
+    and tostring(target.drop_uid or '') == tostring(dropUid or '') then
+    CreateThread(function() MZInventoryBridge.openPlayerView() end)
+  end
+end)
+
+AddEventHandler('mz_inventory:client:worldDropUpserted', function(drop)
+  local target = MZInventoryState.session.context.target
+  if not MZInventoryState.isOpen() or type(target) ~= 'table' or target.type ~= 'ground_backpack'
+    or type(drop) ~= 'table' or tostring(drop.drop_uid or '') ~= tostring(target.drop_uid or '') then return end
+  local metadata = type(drop.metadata) == 'table' and drop.metadata or {}
+  if tostring(metadata.backpack_instance_uid or '') ~= tostring(target.instance_uid or '') then
+    CreateThread(function() MZInventoryBridge.openPlayerView() end)
+  end
+end)
+
 AddEventHandler('onResourceStop', function(resourceName)
   if resourceName ~= GetCurrentResourceName() then
     return

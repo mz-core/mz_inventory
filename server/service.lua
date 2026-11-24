@@ -257,8 +257,8 @@ local function getPlayerInventoryContext(source)
     maxWeight = capacity.maxWeight,
     baseSlots = capacity.baseSlots,
     baseWeight = capacity.baseWeight,
-    backpackExtraSlots = capacity.extraSlots,
-    backpackExtraWeight = capacity.extraWeight,
+    backpackExtraSlots = 0,
+    backpackExtraWeight = 0,
     player = player
   }
 end
@@ -286,6 +286,7 @@ local function getEquipmentContext(source)
     equipment = true
   }
 end
+
 
 local function getPersonalStashContext(source)
   local player, err = getPlayerBySource(source)
@@ -406,7 +407,7 @@ local function getCoreVehicleStorageFallback()
 
   return {
     trunk = {
-      slots = tonumber(trunkConfig.slots) or 30,
+      slots = tonumber(trunkConfig.slots) or 32,
       weight = tonumber(trunkConfig.weight) or 120000
     },
     glovebox = {
@@ -567,6 +568,8 @@ local function normalizeWorldCoords(coords)
   }
 end
 
+local worldDropAccess = {}
+
 local function getWorldDropContext(dropUid)
   dropUid = tostring(dropUid or '')
   if dropUid == '' then
@@ -583,10 +586,27 @@ local function getWorldDropContext(dropUid)
     ownerType = 'world_drop',
     ownerId = dropUid,
     inventoryType = 'drop',
-    maxSlots = 40,
+    maxSlots = tonumber((Config.Inventory or {}).worldDropSlots) or 48,
     maxWeight = 1000000,
     drop = drop
   }
+end
+
+function worldDropAccess.validate(source, ctx)
+  if type(ctx) ~= 'table' or ctx.ownerType ~= 'world_drop' then return true end
+  local player = getPlayerBySource(source)
+  if not player then return false, 'player_not_loaded' end
+  local coords = worldDropAccess.getSourcePedCoords(source)
+  if not coords or not ctx.drop then return false, 'inventory_access_denied' end
+  local ok, bucket = pcall(GetPlayerRoutingBucket, source)
+  local metadata = type(ctx.drop.metadata_json) == 'table' and ctx.drop.metadata_json or {}
+  if not ok or tonumber(bucket) == nil or tonumber(bucket) ~= (tonumber(metadata.routing_bucket) or 0) then
+    return false, 'inventory_access_denied'
+  end
+  if worldDropAccess.getDistanceSquared(coords, { x = ctx.drop.x, y = ctx.drop.y, z = ctx.drop.z }) > 3.5 * 3.5 then
+    return false, 'inventory_access_denied'
+  end
+  return true
 end
 
 local function isDropEmpty(dropUid)
@@ -647,13 +667,29 @@ local function buildWorldDropSyncPayload(drop)
     return nil
   end
 
+  local rows = MZInventoryRepository.getInventory('world_drop', dropUid, 'drop')
+  local attachments = Config.Weapons and Config.Weapons.bodyAttachments
+  local models = type(attachments) == 'table' and attachments.items or {}
+  local item = type(rows) == 'table' and #rows == 1 and rows[1] or nil
+  local model = item and type(models) == 'table' and models[item.item] or nil
+  local definition = item and getItemDefinition(item.item) or nil
+  local metadata = cloneTable(type(drop.metadata_json) == 'table' and drop.metadata_json or {})
+  if metadata.backpack_instance_uid then
+    local present = false
+    for _, row in ipairs(rows or {}) do
+      if tostring(row.instance_uid or '') == tostring(metadata.backpack_instance_uid) then present = true; break end
+    end
+    if not present then metadata.backpack_instance_uid = nil end
+  end
+
   return {
     drop_uid = dropUid,
     label = tostring(drop.label or 'Drop'),
     x = tonumber(drop.x) or 0,
     y = tonumber(drop.y) or 0,
     z = tonumber(drop.z) or 0,
-    metadata = cloneTable(type(drop.metadata_json) == 'table' and drop.metadata_json or {})
+    metadata = metadata,
+    prop_model = definition and definition.type == 'weapon' and type(model) == 'table' and model.model or nil
   }
 end
 
@@ -664,6 +700,7 @@ emitWorldDropUpserted = function(drop)
   end
 
   TriggerEvent('mz_inventory:server:worldDropUpserted', payload)
+  TriggerClientEvent('mz_inventory:client:worldDropUpserted', -1, payload)
 end
 
 emitWorldDropRemoved = function(dropUid)
@@ -673,6 +710,7 @@ emitWorldDropRemoved = function(dropUid)
   end
 
   TriggerEvent('mz_inventory:server:worldDropRemoved', dropUid)
+  TriggerClientEvent('mz_inventory:client:worldDropRemoved', -1, dropUid)
 end
 
 local function buildInventoryActor(player, source)
@@ -1137,16 +1175,15 @@ local function buildUsedSlotLookup(rows)
   return used
 end
 
-local function findFreeSlotInRows(rows, maxSlots, usedSlots)
-  usedSlots = usedSlots or buildUsedSlotLookup(rows)
+local function findFreeSlotInRows(rows, maxSlots, usedSlots, itemName, metadata)
+  return MZInventoryGrid.findFree(rows, maxSlots, MZItems, itemName, metadata, usedSlots)
+end
 
-  for slot = 1, maxSlots do
-    if not usedSlots[slot] then
-      return slot
-    end
-  end
-
-  return nil
+local function spatialSlotAvailable(rows, maxSlots, itemName, metadata, slot)
+  local occupied = MZInventoryGrid.occupancy(rows, maxSlots, MZItems)
+  if not occupied then return false end
+  local width, height = MZInventoryGrid.dimensions(getItemDefinition(itemName), type(metadata) == 'table' and metadata.grid_rotated == true)
+  return MZInventoryGrid.fits(occupied, slot, maxSlots, width, height)
 end
 
 local isEquipmentContext
@@ -1241,7 +1278,11 @@ local function canStackRows(itemDef, fromRow, toRow)
     return false
   end
 
-  return metadataMatches(fromRow.metadata or {}, toRow.metadata or {})
+  local fromMetadata = cloneTable(fromRow.metadata or {})
+  local toMetadata = cloneTable(toRow.metadata or {})
+  if fromMetadata.grid_rotated == false then fromMetadata.grid_rotated = nil end
+  if toMetadata.grid_rotated == false then toMetadata.grid_rotated = nil end
+  return metadataMatches(fromMetadata, toMetadata)
 end
 
 local function findStackableRowInRows(rows, itemName, metadata, ignoredSlot, secondIgnoredSlot)
@@ -1317,6 +1358,9 @@ local function buildMoveOperationPlan(fromCtx, toCtx, fromRow, fromSlot, toSlot,
   local sameInventory = isSameInventoryContext(fromCtx, toCtx)
   local fromAmount = tonumber(fromRow.amount) or 0
   local destinationInstanceUid = options.destinationInstanceUid or fromRow.instance_uid
+  if toCtx.inventoryType == 'backpack' and trimString(destinationInstanceUid) == '' then
+    destinationInstanceUid = MZUtils.generateInstanceUid('MZINV')
+  end
   if isSplit and destinationInstanceUid ~= nil
     and tostring(destinationInstanceUid) == tostring(fromRow.instance_uid or '') then
     destinationInstanceUid = MZUtils.generateInstanceUid('MZINV')
@@ -1503,10 +1547,6 @@ local function planSlotTransferMutation(fromCtx, toCtx, fromSlot, toSlot, amount
   local fromRows = getInventoryRowsFromContext(fromCtx)
   local toRows = sameInventory and fromRows or getInventoryRowsFromContext(toCtx)
 
-  if toSlot == nil then toSlot = findFreeSlotInRows(toRows, toCtx.maxSlots) end
-  if not isValidSlotNumber(toSlot, toCtx.maxSlots) then return false, 'invalid_to_slot' end
-  if sameInventory and fromSlot == toSlot then return false, 'same_slot' end
-
   local fromRow = findRowBySlot(fromRows, fromSlot)
   if not fromRow then
     return false, 'source_slot_empty'
@@ -1515,6 +1555,18 @@ local function planSlotTransferMutation(fromCtx, toCtx, fromSlot, toSlot, amount
   local itemDef = getItemDefinition(fromRow.item)
   if not itemDef then
     return false, 'item_not_found'
+  end
+  if options.rotated ~= nil and type(options.rotated) ~= 'boolean' then return false, 'invalid_rotation' end
+  local originalFromRow = cloneTable(fromRow)
+  local oldRotated = type(fromRow.metadata) == 'table' and fromRow.metadata.grid_rotated == true
+  if options.rotated ~= nil then
+    fromRow.metadata = cloneTable(type(fromRow.metadata) == 'table' and fromRow.metadata or {})
+    fromRow.metadata.grid_rotated = options.rotated and true or nil
+  end
+  if toSlot == nil then toSlot = findFreeSlotInRows(toRows, toCtx.maxSlots, nil, fromRow.item, fromRow.metadata) end
+  if not isValidSlotNumber(toSlot, toCtx.maxSlots) then return false, 'invalid_to_slot' end
+  if sameInventory and fromSlot == toSlot and (options.rotated == nil or options.rotated == oldRotated) then
+    return false, 'same_slot'
   end
   if options.rejectBound and (itemDef.bindOnReceive == true
     or (type(fromRow.metadata) == 'table' and fromRow.metadata.bound == true)) then
@@ -1568,7 +1620,8 @@ local function planSlotTransferMutation(fromCtx, toCtx, fromSlot, toSlot, amount
 
   local forcedOperation = tostring(options.forcedOperation or ''):lower()
   local resolvedToSlot = tonumber(toSlot) or toSlot
-  local toRow = findRowBySlot(toRows, resolvedToSlot)
+  local toRow = sameInventory and resolvedToSlot == fromSlot and nil or findRowBySlot(toRows, resolvedToSlot)
+  if sameInventory and resolvedToSlot == fromSlot then toRow = nil end
 
   if MZInventoryMoneyRules.isItem(fromRow.item) and toRow and tostring(toRow.item or '') == tostring(fromRow.item or '') then
     local toAmount, toErr = MZInventoryMoneyRules.validateAmount(toRow.amount)
@@ -1639,6 +1692,44 @@ local function planSlotTransferMutation(fromCtx, toCtx, fromSlot, toSlot, amount
     operation = 'swap'
   end
   if operation == 'swap' and options.allowSwap == false then return false, 'swap_not_allowed' end
+  if operation == 'merge' and options.rotated ~= nil and options.rotated ~= oldRotated then
+    return false, 'merge_not_allowed'
+  end
+
+  if operation ~= 'merge' then
+    local function finalRows(rows, removeSource, removeTarget)
+      local result = {}
+      for _, row in ipairs(rows) do
+        local slot = tonumber(row.slot)
+        if not (removeSource and slot == fromSlot) and not (removeTarget and slot == resolvedToSlot) then
+          result[#result + 1] = sameInventory and operation == 'split' and slot == fromSlot
+            and originalFromRow or row
+        end
+      end
+      return result
+    end
+    local function place(rows, row, slot)
+      local copy = cloneTable(row)
+      copy.slot = slot
+      rows[#rows + 1] = copy
+    end
+    local same = sameInventory
+    local destinationRows = finalRows(toRows, same and operation ~= 'split', operation == 'swap')
+    if not isEquipmentContext(toCtx) then
+      place(destinationRows, fromRow, resolvedToSlot)
+      if same and operation == 'swap' then place(destinationRows, toRow, fromSlot) end
+      if not MZInventoryGrid.occupancy(destinationRows, toCtx.maxSlots, MZItems) then
+        return false, 'inventory_space_unavailable'
+      end
+    end
+    if not same and operation == 'swap' and not isEquipmentContext(fromCtx) then
+      local sourceRows = finalRows(fromRows, true, false)
+      place(sourceRows, toRow, fromSlot)
+      if not MZInventoryGrid.occupancy(sourceRows, fromCtx.maxSlots, MZItems) then
+        return false, 'inventory_space_unavailable'
+      end
+    end
+  end
 
   local equipmentOk, equipmentErr = validateEquipmentTransfer(
     fromCtx, toCtx, fromRow, toRow, fromSlot, resolvedToSlot, operation
@@ -1735,6 +1826,9 @@ local function planSlotTransferMutation(fromCtx, toCtx, fromSlot, toSlot, amount
   else
     plan = buildSwapOperationPlan(fromCtx, toCtx, fromRow, toRow, fromSlot, resolvedToSlot)
   end
+  if options.rotated ~= nil and plan.logPayload and plan.logPayload.before then
+    plan.logPayload.before.from_slot = buildSlotSnapshot(originalFromRow, fromSlot)
+  end
 
   if isEquipmentContext(toCtx) then
     plan.equipmentChangeReason = itemDef.type == 'clothing' and 'equip' or 'equipment_equip'
@@ -1746,7 +1840,32 @@ local function planSlotTransferMutation(fromCtx, toCtx, fromSlot, toSlot, amount
 end
 
 local function moveBetweenContexts(actorPlayer, fromCtx, toCtx, fromSlot, toSlot, amount, options)
-  return executeInventoryMutation(actorPlayer, { fromCtx, toCtx }, 'move_between_contexts', function()
+  local contexts = { fromCtx, toCtx }
+  if fromCtx.inventoryType == 'backpack' then contexts[#contexts + 1] = fromCtx.equipment end
+  if toCtx.inventoryType == 'backpack' then contexts[#contexts + 1] = toCtx.equipment end
+  local ok, result = executeInventoryMutation(actorPlayer, contexts, 'move_between_contexts', function()
+    for _, ctx in ipairs({ fromCtx, toCtx }) do
+      local allowed, accessErr = worldDropAccess.validate(actorPlayer and actorPlayer.source or ctx.accessSource, ctx)
+      if not allowed then return false, accessErr end
+      if ctx.inventoryType == 'backpack' then
+        local current = ctx.groundDrop and MZInventoryService.getGroundBackpackContext(ctx.player.source, ctx.groundDrop.ownerId, ctx.ownerId)
+          or (not ctx.groundDrop and MZInventoryService.getEquippedBackpackContext(ctx.player.source))
+        if not current or current.ownerId ~= ctx.ownerId or current.equipment.ownerId ~= ctx.equipment.ownerId
+          or current.maxSlots ~= ctx.maxSlots or current.maxWeight ~= ctx.maxWeight then return false, 'backpack_changed' end
+      end
+    end
+    if toCtx.inventoryType == 'backpack' then
+      local row = findRowBySlot(getInventoryRowsFromContext(fromCtx), tonumber(fromSlot))
+      local slot = row and getRowEquipmentSlot(row)
+      if slot and slot.id == 'backpack' then return false, 'backpack_nesting_forbidden' end
+      if row and MZInventoryMoneyRules.isItem(row.item) then return false, 'money_mutation_not_authorized' end
+    end
+    if fromCtx.inventoryType == 'backpack' and not isSameInventoryContext(fromCtx, toCtx) then
+      local row = findRowBySlot(getInventoryRowsFromContext(toCtx), tonumber(toSlot))
+      local slot = row and getRowEquipmentSlot(row)
+      if slot and slot.id == 'backpack' then return false, 'backpack_nesting_forbidden' end
+      if row and MZInventoryMoneyRules.isItem(row.item) then return false, 'money_mutation_not_authorized' end
+    end
     if type(options) == 'table' and type(options.validateBeforePlan) == 'function' then
       local valid, validationError = options.validateBeforePlan()
       if valid ~= true then return false, validationError or 'inventory_access_denied' end
@@ -1764,6 +1883,157 @@ local function moveBetweenContexts(actorPlayer, fromCtx, toCtx, fromSlot, toSlot
     end
 
     return plan
+  end)
+  if ok then
+    local seen = {}
+    for _, ctx in ipairs({ fromCtx, toCtx }) do
+      if ctx.ownerType == 'world_drop' and not seen[ctx.ownerId] then
+        seen[ctx.ownerId] = true
+        local drop = MZWorldDropRepository.getByUid(ctx.ownerId)
+        if drop then
+          local synced, syncError = pcall(emitWorldDropUpserted, drop)
+          if not synced then print(('[mz_inventory][drop_sync_failed] %s'):format(tostring(syncError))) end
+        end
+      end
+    end
+  end
+  return ok, result
+end
+
+-- The item UID is the container owner; equipment remains the authority for access.
+function MZInventoryService.getEquippedBackpackContext(source)
+  local equipment, err = getEquipmentContext(source)
+  if not equipment then return nil, err end
+  local definition = getEquipmentSlot('backpack')
+  local bag = definition and MZInventoryRepository.getSlot(
+    equipment.ownerType, equipment.ownerId, equipment.inventoryType, definition.slot
+  ) or nil
+  local uid = trimString(bag and bag.instance_uid)
+  local normalized = MZInventoryOwnerContract.normalize({
+    ownerType = 'item_instance', ownerId = uid, inventoryType = 'backpack'
+  })
+  local valid = bag and MZEquipment.canEnter(bag, getItemDefinition(bag.item), definition.slot)
+  local capacity = MZEquipment.getBackpackBonus(bag)
+  if not normalized or not valid or capacity.extraSlots < 1 then return nil, 'backpack_not_equipped' end
+  return {
+    label = 'backpack', ownerType = normalized.ownerType, ownerId = normalized.ownerId,
+    inventoryType = normalized.containerType, maxSlots = capacity.extraSlots,
+    maxWeight = capacity.extraWeight, player = equipment.player, equipment = equipment
+  }
+end
+
+function MZInventoryService.getGroundBackpackContext(source, dropUid, uid)
+  local player, err = getPlayerBySource(source)
+  if not player then return nil, err end
+  local drop, dropErr = getWorldDropContext(dropUid)
+  if not drop then return nil, dropErr end
+  local allowed, accessErr = worldDropAccess.validate(source, drop)
+  if not allowed then return nil, accessErr end
+  local bag = MZInventoryRepository.getByInstanceUid(uid)
+  local definition = getEquipmentSlot('backpack')
+  if not bag or bag.owner_type ~= 'world_drop' or tostring(bag.owner_id) ~= tostring(dropUid)
+    or bag.inventory_type ~= 'drop' or not definition
+    or not MZEquipment.canEnter(bag, getItemDefinition(bag.item), definition.slot) then
+    return nil, 'backpack_not_accessible'
+  end
+  local capacity = MZEquipment.getBackpackBonus(bag)
+  if capacity.extraSlots < 1 then return nil, 'backpack_not_accessible' end
+  return { label = 'backpack', ownerType = 'item_instance', ownerId = tostring(uid), inventoryType = 'backpack',
+    maxSlots = capacity.extraSlots, maxWeight = capacity.extraWeight, player = player,
+    equipment = drop, groundDrop = drop }
+end
+
+function MZInventoryService.withEquippedBackpack(source, action, fromSlot, toSlot, amount)
+  if action ~= 'read' and action ~= 'store' and action ~= 'take' then return false, 'invalid_action' end
+  if not playerActionAllowed(source, action == 'read' and 'inventory.open' or 'inventory.move') then
+    return false, 'player_state_blocked'
+  end
+  local main, mainErr = getPlayerInventoryContext(source)
+  if not main then return false, mainErr end
+  local bag, bagErr = MZInventoryService.getEquippedBackpackContext(source)
+  if not bag then return false, bagErr end
+
+  return executeInventoryMutation(main.player, { main, bag.equipment, bag }, 'backpack_' .. action, function()
+    local current, currentErr = MZInventoryService.getEquippedBackpackContext(source)
+    if not current or current.ownerId ~= bag.ownerId or current.equipment.ownerId ~= bag.equipment.ownerId
+      or current.maxSlots ~= bag.maxSlots or current.maxWeight ~= bag.maxWeight then
+      return false, currentErr or 'backpack_changed'
+    end
+    if action == 'read' then
+      return { result = { instance_uid = bag.ownerId, max_slots = bag.maxSlots,
+        max_weight = bag.maxWeight, items = cloneTable(getInventoryRowsFromContext(bag)) } }
+    end
+    local fromCtx, toCtx = action == 'store' and main or bag, action == 'store' and bag or main
+    if action == 'store' then
+      local row = findRowBySlot(getInventoryRowsFromContext(main), tonumber(fromSlot))
+      if row and MZInventoryMoneyRules.isItem(row.item) then return false, 'money_mutation_not_authorized' end
+      local slot = row and getRowEquipmentSlot(row)
+      if slot and slot.id == 'backpack' then return false, 'backpack_nesting_forbidden' end
+    end
+    return planSlotTransferMutation(fromCtx, toCtx, fromSlot, toSlot, amount, { allowSwap = false })
+  end)
+end
+
+function MZInventoryService.migrateLegacyBackpackSlots(source)
+  local main, mainErr = getPlayerInventoryContext(source)
+  if not main then return false, mainErr end
+  local bag, bagErr = MZInventoryService.getEquippedBackpackContext(source)
+  if not bag then
+    if bagErr ~= 'backpack_not_equipped' then return false, bagErr end
+    for _, row in ipairs(getInventoryRowsFromContext(main)) do
+      if (tonumber(row.slot) or 0) > main.baseSlots then return false, bagErr end
+    end
+    return true, { moved = 0 }
+  end
+
+  return executeInventoryMutation(main.player, { main, bag.equipment, bag }, 'backpack_migrate', function()
+    local current, currentErr = MZInventoryService.getEquippedBackpackContext(source)
+    if not current or current.ownerId ~= bag.ownerId or current.equipment.ownerId ~= bag.equipment.ownerId
+      or current.maxSlots ~= bag.maxSlots or current.maxWeight ~= bag.maxWeight then
+      return false, currentErr or 'backpack_changed'
+    end
+
+    local sourceRows = getInventoryRowsFromContext(main)
+    local hasExtra = false
+    for _, row in ipairs(sourceRows) do
+      if (tonumber(row.slot) or 0) > main.baseSlots then hasExtra = true; break end
+    end
+    if not hasExtra then return { result = { instance_uid = bag.ownerId, moved = 0 } } end
+    local bagRows = getInventoryRowsFromContext(bag)
+    local used = buildUsedSlotLookup(bagRows)
+    for _, row in ipairs(bagRows) do
+      if not getItemDefinition(row.item) then return false, 'backpack_migration_invalid_item' end
+    end
+    local totalWeight = getRowsWeight(bagRows)
+    local statements, moved = {}, 0
+    for _, row in ipairs(sourceRows) do
+      if (tonumber(row.slot) or 0) > main.baseSlots then
+        local definition = getItemDefinition(row.item)
+        if not definition or not tonumber(row.id) then return false, 'backpack_migration_invalid_item' end
+        if MZInventoryMoneyRules.isItem(row.item) then return false, 'money_mutation_not_authorized' end
+        local equipmentSlot = getRowEquipmentSlot(row)
+        if equipmentSlot and equipmentSlot.id == 'backpack' then return false, 'backpack_nesting_forbidden' end
+        local slot = findFreeSlotInRows(bagRows, bag.maxSlots, used, row.item, row.metadata)
+        if not slot then return false, 'backpack_migration_no_space' end
+        totalWeight = totalWeight + computeRowWeight(row)
+        if totalWeight > bag.maxWeight then return false, 'backpack_migration_overweight' end
+        used[slot] = true
+        local planned = cloneTable(row)
+        planned.slot = slot
+        bagRows[#bagRows + 1] = planned
+        statements[#statements + 1] = MZInventoryRepository.buildRelocateSlotStatement(
+          row.id, bag.ownerType, bag.ownerId, bag.inventoryType, slot
+        )
+        moved = moved + 1
+      end
+    end
+    return {
+      statements = statements,
+      logAction = moved > 0 and 'backpack_migrate_legacy_slots' or nil,
+      logTargetCtx = bag,
+      logPayload = { meta = { moved = moved, backpack_uid = bag.ownerId } },
+      result = { instance_uid = bag.ownerId, moved = moved }
+    }
   end)
 end
 
@@ -2145,10 +2415,17 @@ function MZInventoryService.retainPrisonerProperty(targetSource, sentenceId)
   if #mainRows + #equipmentRows > retained.maxSlots then return false, 'prison_property_capacity' end
 
   local ok, result = executeInventoryMutation(player, { main, equipment, retained }, 'prison_property_retain', function()
-    local statements, items, retainedSlot = {}, {}, 0
+    mainRows, equipmentRows, retainedRows = getInventoryRowsFromContext(main),
+      getInventoryRowsFromContext(equipment), getInventoryRowsFromContext(retained)
+    if #retainedRows > 0 then return false, 'prison_property_conflict' end
+    local statements, items = {}, {}
+    local retainedWeight = 0
     for _, entry in ipairs({ { ctx = main, rows = mainRows }, { ctx = equipment, rows = equipmentRows } }) do
       for _, row in ipairs(entry.rows) do
-        retainedSlot = retainedSlot + 1
+        local retainedSlot = findFreeSlotInRows(retainedRows, retained.maxSlots, nil, row.item, row.metadata)
+        if not retainedSlot then return false, 'prison_property_capacity' end
+        retainedWeight = retainedWeight + computeRowWeight(row)
+        if retainedWeight > retained.maxWeight then return false, 'prison_property_capacity' end
         local metadata = cloneTable(type(row.metadata) == 'table' and row.metadata or {})
         metadata.prisonProperty = {
           sentenceId = sentenceId,
@@ -2160,6 +2437,9 @@ function MZInventoryService.retainPrisonerProperty(targetSource, sentenceId)
         statements[#statements + 1] = buildTransactionSetRow(
           retained, retainedSlot, row.item, tonumber(row.amount) or 0, metadata, row.instance_uid
         )
+        local planned = cloneTable(row)
+        planned.slot, planned.metadata = retainedSlot, metadata
+        retainedRows[#retainedRows + 1] = planned
         items[#items + 1] = {
           retainedSlot = retainedSlot, instanceUid = tostring(row.instance_uid or ''),
           item = tostring(row.item or ''), amount = tonumber(row.amount) or 0,
@@ -2240,6 +2520,8 @@ function MZInventoryService.restorePrisonerProperty(targetSource, sentenceId, ex
   if #retainedRows ~= expectedItemCount then return false, 'prison_property_count_mismatch' end
 
   local ok, result = executeInventoryMutation(player, { retained, main, equipment }, 'prison_property_restore', function()
+    retainedRows = getInventoryRowsFromContext(retained)
+    if #retainedRows ~= expectedItemCount then return false, 'prison_property_count_mismatch' end
     local targetRows = {
       [MZConstants.InventoryTypes.MAIN] = getInventoryRowsFromContext(main),
       [MZConstants.InventoryTypes.EQUIPMENT] = getInventoryRowsFromContext(equipment)
@@ -2261,8 +2543,12 @@ function MZInventoryService.restorePrisonerProperty(targetSource, sentenceId, ex
       local target = targets[inventoryType]
       if not target then return false, 'prison_property_metadata_invalid' end
       local destinationSlot = tonumber(marker.originalSlot)
-      if not isValidSlotNumber(destinationSlot, target.maxSlots) or used[inventoryType][destinationSlot] then
-        destinationSlot = findFreeSlotInRows(targetRows[inventoryType], target.maxSlots, used[inventoryType])
+      if inventoryType == MZConstants.InventoryTypes.EQUIPMENT then
+        if not isValidSlotNumber(destinationSlot, target.maxSlots) or used[inventoryType][destinationSlot] then
+          return false, 'no_free_slot'
+        end
+      elseif not spatialSlotAvailable(targetRows[inventoryType], target.maxSlots, row.item, metadata, destinationSlot) then
+        destinationSlot = findFreeSlotInRows(targetRows[inventoryType], target.maxSlots, nil, row.item, metadata)
       end
       if not destinationSlot then return false, 'no_free_slot' end
       local carryOk, carryError = canCarryRows(
@@ -3840,12 +4126,13 @@ local function buildAddItemMutationPlan(ctx, itemName, amount, metadata)
     local addedSlots = {}
 
     for _ = 1, uniqueCount do
-      local slot = findFreeSlotInRows(rows, ctx.maxSlots, usedSlots)
+      local slot = findFreeSlotInRows(rows, ctx.maxSlots, usedSlots, itemName, metadata)
       if not slot then
         return false, 'no_free_slot'
       end
 
-      usedSlots[slot] = true
+      local width, height = MZInventoryGrid.dimensions(itemDef, metadata.grid_rotated == true)
+      for _, cell in ipairs(MZInventoryGrid.cells(slot, ctx.maxSlots, width, height)) do usedSlots[cell] = true end
 
       local finalMetadata = buildItemMetadata(itemDef, metadata, ctx.player.citizenid, itemName)
       statements[#statements + 1] = buildTransactionSetRow(
@@ -3924,7 +4211,7 @@ local function buildAddItemMutationPlan(ctx, itemName, amount, metadata)
     }
   end
 
-  local slot = findFreeSlotInRows(rows, ctx.maxSlots)
+  local slot = findFreeSlotInRows(rows, ctx.maxSlots, nil, itemName, metadata)
   if not slot then
     return false, 'no_free_slot'
   end
@@ -4040,13 +4327,13 @@ local function buildSetPlayerSlotMutationPlan(ctx, slot, itemName, amount, metad
   if not itemDef then
     return false, 'item_not_found'
   end
-
   slot = tonumber(slot)
   amount = tonumber(amount) or 1
   if not isValidSlotNumber(slot, ctx.maxSlots) then
     return false, 'invalid_slot'
   end
-  local current = findRowBySlot(getInventoryRowsFromContext(ctx), slot)
+  local rows = getInventoryRowsFromContext(ctx)
+  local current = findRowBySlot(rows, slot)
   if MZInventoryMoneyRules.isItem(itemName) or (current and MZInventoryMoneyRules.isItem(current.item)) then
     return false, 'money_mutation_not_authorized'
   end
@@ -4063,6 +4350,11 @@ local function buildSetPlayerSlotMutationPlan(ctx, slot, itemName, amount, metad
   local finalMetadata = itemDef.unique
     and buildItemMetadata(itemDef, metadata, ctx.player.citizenid, itemName)
     or normalizeMetadataTable(metadata)
+  local remaining = {}
+  for _, row in ipairs(rows) do if tonumber(row.slot) ~= slot then remaining[#remaining + 1] = row end end
+  if not spatialSlotAvailable(remaining, ctx.maxSlots, itemName, finalMetadata, slot) then
+    return false, 'inventory_space_unavailable'
+  end
 
   local rowAmount = itemDef.unique and 1 or amount
 
@@ -4152,6 +4444,13 @@ local function buildSetPlayerSlotMetadataMutationPlan(ctx, slot, metadata, mode)
 
   if row.instance_uid and not nextMetadata.uid then
     nextMetadata.uid = row.instance_uid
+  end
+  local remaining = {}
+  for _, existing in ipairs(getInventoryRowsFromContext(ctx)) do
+    if tonumber(existing.slot) ~= slot then remaining[#remaining + 1] = existing end
+  end
+  if not spatialSlotAvailable(remaining, ctx.maxSlots, row.item, nextMetadata, slot) then
+    return false, 'inventory_space_unavailable'
   end
 
   return {
@@ -4647,10 +4946,16 @@ function MZInventoryService.moveWorldDropToPlayer(source, dropUid, fromSlot, toS
 end
 
 function MZInventoryService.listWorldDrops()
-  return true, MZWorldDropRepository.listAll()
+  local drops = MZWorldDropRepository.listAll() or {}
+  for _, drop in ipairs(drops) do
+    local presentation = buildWorldDropSyncPayload(drop)
+    drop.prop_model = presentation and presentation.prop_model or nil
+    drop.metadata = presentation and presentation.metadata or nil
+  end
+  return true, drops
 end
 
-local function getSourcePedCoords(source)
+worldDropAccess.getSourcePedCoords = function(source)
   local ped = GetPlayerPed(source)
   if not ped or ped == 0 then
     return nil
@@ -4668,7 +4973,7 @@ local function getSourcePedCoords(source)
   }
 end
 
-local function getDistanceSquared(leftCoords, rightCoords)
+worldDropAccess.getDistanceSquared = function(leftCoords, rightCoords)
   if type(leftCoords) ~= 'table' or type(rightCoords) ~= 'table' then
     return math.huge
   end
@@ -4681,7 +4986,7 @@ local function getDistanceSquared(leftCoords, rightCoords)
 end
 
 local function resolveGroundDropCoords(source, requestedCoords)
-  local fallbackCoords = getSourcePedCoords(source)
+  local fallbackCoords = worldDropAccess.getSourcePedCoords(source)
   local normalizedCoords = normalizeWorldCoords(requestedCoords)
 
   if type(requestedCoords) ~= 'table' then
@@ -4693,14 +4998,14 @@ local function resolveGroundDropCoords(source, requestedCoords)
   end
 
   local maxDistanceSq = WORLD_DROP_MAX_DISTANCE_FROM_PLAYER * WORLD_DROP_MAX_DISTANCE_FROM_PLAYER
-  if getDistanceSquared(fallbackCoords, normalizedCoords) > maxDistanceSq then
+  if worldDropAccess.getDistanceSquared(fallbackCoords, normalizedCoords) > maxDistanceSq then
     return fallbackCoords
   end
 
   return normalizedCoords
 end
 
-local function findReusableWorldDropForPlayer(player, coords)
+local function findReusableWorldDropForPlayer(player, coords, source)
   if type(player) ~= 'table' or tostring(player.citizenid or '') == '' then
     return nil
   end
@@ -4708,11 +5013,14 @@ local function findReusableWorldDropForPlayer(player, coords)
   local bestDrop = nil
   local bestDistanceSq = nil
   local maxDistanceSq = WORLD_DROP_REUSE_RADIUS * WORLD_DROP_REUSE_RADIUS
+  local bucketOk, bucket = pcall(GetPlayerRoutingBucket, source)
+  if not bucketOk or tonumber(bucket) == nil then return nil end
 
   for _, drop in ipairs(MZWorldDropRepository.listAll() or {}) do
     local metadata = type(drop.metadata_json) == 'table' and drop.metadata_json or {}
-    if tostring(metadata.created_by or '') == tostring(player.citizenid) then
-      local distanceSq = getDistanceSquared(coords, {
+    if not metadata.backpack_instance_uid and tonumber(bucket) == (tonumber(metadata.routing_bucket) or 0)
+      and tostring(metadata.created_by or '') == tostring(player.citizenid) then
+      local distanceSq = worldDropAccess.getDistanceSquared(coords, {
         x = drop.x,
         y = drop.y,
         z = drop.z
@@ -4735,11 +5043,14 @@ local function chooseWorldDropSlot(ctx, itemName, metadata)
     return tonumber(stackRow.slot) or stackRow.slot
   end
 
-  return findFreeSlotInRows(rows, ctx.maxSlots)
+  return findFreeSlotInRows(rows, ctx.maxSlots, nil, itemName, metadata)
 end
 
 local function ensureWorldDropForTransfer(source, playerCtx, itemRow, coords)
-  local reusableDrop = findReusableWorldDropForPlayer(playerCtx.player, coords)
+  local equipmentSlot = getRowEquipmentSlot(itemRow)
+  local backpackUid = equipmentSlot and equipmentSlot.id == 'backpack' and trimString(itemRow.instance_uid) or nil
+  if backpackUid == '' then return false, 'missing_instance_uid' end
+  local reusableDrop = not backpackUid and findReusableWorldDropForPlayer(playerCtx.player, coords, source) or nil
   if reusableDrop then
     local reusableCtx = getWorldDropContext(reusableDrop.drop_uid)
     if reusableCtx then
@@ -4753,6 +5064,8 @@ local function ensureWorldDropForTransfer(source, playerCtx, itemRow, coords)
   local ok, dropOrErr = MZInventoryService.createWorldDrop(coords, WORLD_DROP_DEFAULT_LABEL, {
     source = 'inventory_drop',
     created_by = tostring(playerCtx.player and playerCtx.player.citizenid or ''),
+    routing_bucket = GetPlayerRoutingBucket(source),
+    backpack_instance_uid = backpackUid,
     created_at = os.time()
   })
   if not ok then
@@ -5147,7 +5460,6 @@ function MZInventoryService.cancelMedicalItemReservation(source, operationId, in
 
   local ok, result = executeInventoryMutation(ctx.player, { ctx }, 'rollback_medical_item', function()
     local rows = getInventoryRowsFromContext(ctx)
-    local current = findRowBySlot(rows, snapshot.slot)
     local statement
     local restoredSlot = snapshot.slot
     local matchingInstance
@@ -5163,9 +5475,8 @@ function MZInventoryService.cancelMedicalItemReservation(source, operationId, in
         restoredSlot = tonumber(matchingInstance.slot)
         statement = buildTransactionUpdateAmount(ctx, restoredSlot, (tonumber(matchingInstance.amount) or 0) + 1)
       else
-        if current then
-          local used = buildUsedSlotLookup(rows)
-          restoredSlot = findFreeSlotInRows(rows, ctx.maxSlots, used)
+        if not spatialSlotAvailable(rows, ctx.maxSlots, snapshot.item, snapshot.metadata, restoredSlot) then
+          restoredSlot = findFreeSlotInRows(rows, ctx.maxSlots, nil, snapshot.item, snapshot.metadata)
           if not restoredSlot then return false, 'no_free_slot' end
         end
         statement = buildTransactionSetRow(
@@ -5176,9 +5487,8 @@ function MZInventoryService.cancelMedicalItemReservation(source, operationId, in
       if matchingInstance then
         if tostring(matchingInstance.item or '') ~= snapshot.item then return false, 'reservation_instance_conflict' end
         restoredSlot = tonumber(matchingInstance.slot)
-      elseif current then
-        local used = buildUsedSlotLookup(rows)
-        restoredSlot = findFreeSlotInRows(rows, ctx.maxSlots, used)
+      elseif not spatialSlotAvailable(rows, ctx.maxSlots, snapshot.item, snapshot.metadata, restoredSlot) then
+        restoredSlot = findFreeSlotInRows(rows, ctx.maxSlots, nil, snapshot.item, snapshot.metadata)
         if not restoredSlot then return false, 'no_free_slot' end
       end
       if not matchingInstance then
@@ -5738,6 +6048,7 @@ end
 
 local PublicInventoryErrors = {
   inventory_busy = { code = 'inventory_busy', message = 'Inventory is busy.' },
+  inventory_access_denied = { code = 'inventory_access_denied', message = 'Aproxime-se do item para acessá-lo.' },
   invalid_container = { code = 'invalid_container', message = 'Invalid inventory container.' },
   invalid_slot = { code = 'invalid_slot', message = 'Invalid inventory slot.' },
   invalid_amount = { code = 'invalid_amount', message = 'Invalid item amount.' },
@@ -5907,6 +6218,19 @@ local function normalizePublicContainerDescriptor(descriptor)
     return normalized
   end
 
+  if containerType == 'backpack' then
+    normalized.instance_uid = trimString(descriptor.instance_uid)
+    if normalized.instance_uid == '' then return nil, 'invalid_container' end
+    return normalized
+  end
+
+  if containerType == 'ground_backpack' then
+    normalized.instance_uid = trimString(descriptor.instance_uid)
+    normalized.drop_uid = trimString(descriptor.drop_uid)
+    if normalized.instance_uid == '' or normalized.drop_uid == '' then return nil, 'invalid_container' end
+    return normalized
+  end
+
   if containerType == 'trunk' or containerType == 'glovebox' then
     normalized.plate = tostring(descriptor.plate or ''):upper():gsub('^%s+', ''):gsub('%s+$', '')
     if normalized.plate == '' then
@@ -5967,6 +6291,11 @@ local function resolvePublicContainerContext(source, descriptor)
     ctx, err = getPlayerInventoryContext(source)
   elseif normalized.type == 'equipment' then
     ctx, err = getEquipmentContext(source)
+  elseif normalized.type == 'backpack' then
+    ctx, err = MZInventoryService.getEquippedBackpackContext(source)
+    if ctx and ctx.ownerId ~= normalized.instance_uid then return nil, 'backpack_changed' end
+  elseif normalized.type == 'ground_backpack' then
+    ctx, err = MZInventoryService.getGroundBackpackContext(source, normalized.drop_uid, normalized.instance_uid)
   elseif normalized.type == 'trunk' then
     ctx, err = getVehicleTrunkContext(source, normalized.plate)
   elseif normalized.type == 'glovebox' then
@@ -5988,6 +6317,10 @@ local function resolvePublicContainerContext(source, descriptor)
   if not ctx then
     return nil, err or 'invalid_container'
   end
+
+  local allowed, accessErr = worldDropAccess.validate(source, ctx)
+  if not allowed then return nil, accessErr end
+  if normalized.type == 'drop' then ctx.accessSource = source end
 
   return ctx, nil, normalized
 end
@@ -6020,7 +6353,7 @@ local function buildPublicSlotPayload(row, slot)
   local metadata = type(row.metadata) == 'table' and row.metadata or {}
   local clothing = type(metadata.clothing) == 'table' and metadata.clothing or nil
   local publicMetadata = {}
-  for _, key in ipairs({ 'serial', 'durability', 'quality', 'brand', 'image', 'icon', 'ammo', 'clip_ammo', 'ammo_type' }) do
+  for _, key in ipairs({ 'serial', 'durability', 'quality', 'brand', 'image', 'icon', 'ammo', 'clip_ammo', 'ammo_type', 'grid_rotated' }) do
     if metadata[key] ~= nil then publicMetadata[key] = cloneTable(metadata[key]) end
   end
   if clothing then
@@ -6044,6 +6377,7 @@ local function buildPublicSlotPayload(row, slot)
     amount = amount,
     weight = unitWeight,
     total_weight = unitWeight * amount,
+    grid = { width = select(1, MZInventoryGrid.dimensions(itemDef, false)), height = select(2, MZInventoryGrid.dimensions(itemDef, false)) },
     metadata = publicMetadata,
     stack = itemDef and itemDef.stack == true or false,
     usable = itemDef and itemDef.usable == true or false,
@@ -6063,10 +6397,17 @@ local function buildPublicContainerPayload(ctx, descriptor, rows, currentWeight)
   descriptor = type(descriptor) == 'table' and descriptor or {}
 
   local rowBySlot = {}
+  local occupiedCells = 0
   for _, row in ipairs(rows) do
     local slot = tonumber(row.slot)
     if slot then
       rowBySlot[slot] = row
+    end
+    if isEquipmentContext(ctx) then
+      occupiedCells = occupiedCells + 1
+    else
+      local width, height = MZInventoryGrid.dimensions(getItemDefinition(row.item), row.metadata and row.metadata.grid_rotated == true)
+      occupiedCells = occupiedCells + width * height
     end
   end
 
@@ -6095,7 +6436,8 @@ local function buildPublicContainerPayload(ctx, descriptor, rows, currentWeight)
       owner_type = tostring(ctx.ownerType or ''),
       owner_id = tostring(ctx.ownerId or ''),
       inventory_type = tostring(ctx.inventoryType or ''),
-      slot_count = #rows,
+      slot_count = occupiedCells,
+      grid_columns = isEquipmentContext(ctx) and 5 or MZInventoryGrid.columns(),
       max_slots = tonumber(ctx.maxSlots) or 0,
       base_slots = tonumber(ctx.baseSlots),
       backpack_extra_slots = tonumber(ctx.backpackExtraSlots) or 0,
@@ -6123,6 +6465,9 @@ getPublicInventorySnapshot = function(source, descriptor)
   end
 
   local rows = getInventoryRowsFromContext(ctx)
+  if not isEquipmentContext(ctx) and not MZInventoryGrid.occupancy(rows, ctx.maxSlots, MZItems) then
+    return false, 'inventory_space_unavailable'
+  end
   local currentWeight = getRowsWeight(rows)
 
   return true, buildPublicContainerPayload(ctx, normalized, rows, currentWeight), normalized
@@ -6168,16 +6513,20 @@ local function resolvePlayerHotbarSlots(source, citizenid)
     local slot = normalizeHotbarSlot(entry.hotbar_slot)
     local instanceUid = tostring(entry.instance_uid or ''):gsub('^%s+', ''):gsub('%s+$', '')
     if slot and instanceUid ~= '' then
-      bySlot[slot] = instanceUid
+      bySlot[slot] = { instance_uid = instanceUid, backpack_uid = trimString(entry.backpack_uid) }
     end
   end
 
   local slots = {}
   local firstSlot = MZEquipment.getHotbarFirstSlot()
   for slot = firstSlot, firstSlot + getHotbarSlotCount() - 1 do
-    local instanceUid = bySlot[slot]
+    local binding = bySlot[slot]
+    local instanceUid = binding and binding.instance_uid or nil
     local row = instanceUid and MZInventoryRepository.getByInstanceUid(instanceUid) or nil
-    local valid = row and isPlayerMainInventoryRow(row, citizenid)
+    local bag = binding and binding.backpack_uid ~= '' and MZInventoryService.getEquippedBackpackContext(source) or nil
+    local valid = row and (binding.backpack_uid == '' and isPlayerMainInventoryRow(row, citizenid)
+      or bag and bag.ownerId == binding.backpack_uid and row.owner_type == 'item_instance'
+        and row.inventory_type == 'backpack' and tostring(row.owner_id) == bag.ownerId)
     local itemDef = valid and getItemDefinition(row.item) or nil
 
     slots[#slots + 1] = {
@@ -6242,7 +6591,6 @@ local function buildPublicTouchedSnapshots(source, descriptors)
         if not ok then
           return false, snapshotOrErr
         end
-
         dedupe[dedupeKey] = snapshotOrErr
       end
 
@@ -6405,6 +6753,13 @@ function MZInventoryService.getInventoryViewSnapshot(source, request)
     return buildPublicInventoryError(equipmentSnapshotOrErr, { container = { type = 'equipment' } })
   end
 
+  local backpackSnapshot = nil
+  local bag = MZInventoryService.getEquippedBackpackContext(source)
+  if bag then
+    local bagOk, snapshot = getPublicInventorySnapshot(source, { type = 'backpack', instance_uid = bag.ownerId })
+    if bagOk then backpackSnapshot = snapshot end
+  end
+
   local targetSnapshot = nil
   if targetDescriptor ~= nil then
     local targetOk, targetSnapshotOrErr = getPublicInventorySnapshot(source, targetDescriptor)
@@ -6420,6 +6775,7 @@ function MZInventoryService.getInventoryViewSnapshot(source, request)
   return buildPublicInventorySuccess({
     player = playerSnapshotOrErr,
     equipment = equipmentSnapshotOrErr,
+    backpack = backpackSnapshot,
     target = targetSnapshot,
     profile = buildPlayerUiProfile(source)
   })
@@ -6537,7 +6893,7 @@ function MZInventoryService.unequipPlayerItem(source, requestedSlot)
       local futureCapacity = slotDefinition.id == 'backpack'
         and MZEquipment.getPlayerCapacity(nil)
         or { maxSlots = playerCtx.maxSlots, maxWeight = playerCtx.maxWeight }
-      local targetSlot = findFreeSlotInRows(playerRows, futureCapacity.maxSlots)
+      local targetSlot = findFreeSlotInRows(playerRows, futureCapacity.maxSlots, nil, row.item, row.metadata)
       if not targetSlot then return false, 'no_free_slot' end
       local carryOk, carryErr = canCarryRows(playerRows, row.item, row.amount, futureCapacity.maxWeight)
       if not carryOk then return false, carryErr end
@@ -6659,7 +7015,7 @@ function MZInventoryService.applyEquipmentLoadout(source, desiredSlots, invoking
       end
       for _, row in ipairs(equipmentRows) do
         if not desiredUids[trimString(row.instance_uid)] then
-          local freeSlot = findFreeSlotInRows(finalMain, playerCtx.maxSlots, usedMainSlots)
+          local freeSlot = findFreeSlotInRows(finalMain, playerCtx.maxSlots, usedMainSlots, row.item, row.metadata)
           if not freeSlot then return false, 'no_free_slot' end
           local returned = cloneTable(row)
           returned.slot = freeSlot
@@ -6673,6 +7029,10 @@ function MZInventoryService.applyEquipmentLoadout(source, desiredSlots, invoking
         backpackDefinition and desiredBySlot[backpackDefinition.slot] or nil
       )
       if not capacityOk then return false, capacityErr end
+      local capacity = MZEquipment.getPlayerCapacity(backpackDefinition and desiredBySlot[backpackDefinition.slot] or nil)
+      if not MZInventoryGrid.occupancy(finalMain, capacity.maxSlots, MZItems) then
+        return false, 'inventory_space_unavailable'
+      end
 
       local statements = {
         MZInventoryRepository.buildClearInventoryStatement(playerCtx.ownerType, playerCtx.ownerId, playerCtx.inventoryType),
@@ -6760,7 +7120,16 @@ function MZInventoryService.dropInventoryItemAction(source, request)
     dropCtxOrErr,
     fromSlot,
     targetSlot,
-    request.amount
+    request.amount,
+    {
+      validateSourceRow = function(row)
+        local expected = type(dropData.metadata_json) == 'table' and dropData.metadata_json.backpack_instance_uid
+        local slot = getRowEquipmentSlot(row)
+        local isBackpack = slot and slot.id == 'backpack'
+        return (expected and isBackpack and tostring(row.instance_uid or '') == tostring(expected))
+          or (not expected and not isBackpack), 'backpack_changed'
+      end
+    }
   )
   if not moveOk then
     if createdDrop == true and type(dropData) == 'table' and tostring(dropData.drop_uid or '') ~= '' then
@@ -6810,19 +7179,19 @@ local function getPlayerBucket(source)
 end
 
 local function validatePlayerTransferProximity(source, targetSource)
-  local sourceCoords = getSourcePedCoords(source)
+  local sourceCoords = worldDropAccess.getSourcePedCoords(source)
   if not sourceCoords then
     return false, 'invalid_source_position'
   end
 
-  local targetCoords = getSourcePedCoords(targetSource)
+  local targetCoords = worldDropAccess.getSourcePedCoords(targetSource)
   local sourceBucket = getPlayerBucket(source)
   local targetBucket = getPlayerBucket(targetSource)
   if not targetCoords or sourceBucket == nil or targetBucket == nil or sourceBucket ~= targetBucket then
     return false, 'target_too_far'
   end
 
-  local distanceSquared = getDistanceSquared(sourceCoords, targetCoords)
+  local distanceSquared = worldDropAccess.getDistanceSquared(sourceCoords, targetCoords)
   local maxDistance = getPlayerTransferDistance()
   if distanceSquared > (maxDistance * maxDistance) then
     return false, 'target_too_far'
@@ -6837,7 +7206,7 @@ local function findClosestPlayerTransferTarget(source)
     return nil, 'invalid_source'
   end
 
-  local sourceCoords = getSourcePedCoords(source)
+  local sourceCoords = worldDropAccess.getSourcePedCoords(source)
   if not sourceCoords then
     return nil, 'invalid_source_position'
   end
@@ -6853,8 +7222,8 @@ local function findClosestPlayerTransferTarget(source)
     if targetSource and targetSource > 0 and targetSource ~= source then
       local targetBucket = getPlayerBucket(targetSource)
       if sourceBucket ~= nil and targetBucket ~= nil and sourceBucket == targetBucket then
-        local targetCoords = getSourcePedCoords(targetSource)
-        local distanceSquared = getDistanceSquared(sourceCoords, targetCoords)
+        local targetCoords = worldDropAccess.getSourcePedCoords(targetSource)
+        local distanceSquared = worldDropAccess.getDistanceSquared(sourceCoords, targetCoords)
         if distanceSquared <= maxDistanceSquared
           and (closestDistanceSquared == nil or distanceSquared < closestDistanceSquared) then
           closestSource = targetSource
@@ -6882,7 +7251,7 @@ local function choosePlayerTransferTargetSlot(targetCtx, sourceRow)
     return tonumber(stackRow.slot) or stackRow.slot
   end
 
-  return findFreeSlotInRows(targetRows, targetCtx.maxSlots)
+  return findFreeSlotInRows(targetRows, targetCtx.maxSlots, nil, sourceRow.item, sourceRow.metadata)
 end
 
 function MZInventoryService.giveInventoryItemAction(source, request)
@@ -7037,8 +7406,12 @@ function MZInventoryService.moveInventoryItem(source, request)
   local toDescriptor = request.to and request.to.container or request.to_container
   local fromType = type(fromDescriptor) == 'table' and tostring(fromDescriptor.type or '') or tostring(fromDescriptor or '')
   local toType = type(toDescriptor) == 'table' and tostring(toDescriptor.type or '') or tostring(toDescriptor or '')
-  local fromPersonal = fromType == 'player' or fromType == 'equipment'
-  local toPersonal = toType == 'player' or toType == 'equipment'
+  if ((fromType == 'backpack' or fromType == 'ground_backpack') and toType ~= fromType and toType ~= 'player')
+    or ((toType == 'backpack' or toType == 'ground_backpack') and fromType ~= toType and fromType ~= 'player') then
+    return buildPublicInventoryError('invalid_target')
+  end
+  local fromPersonal = fromType == 'player' or fromType == 'equipment' or fromType == 'backpack' or fromType == 'ground_backpack'
+  local toPersonal = toType == 'player' or toType == 'equipment' or toType == 'backpack' or toType == 'ground_backpack'
   local actionName = fromType == 'drop' and 'inventory.pickup'
     or toType == 'drop' and 'inventory.drop'
     or (not fromPersonal or not toPersonal) and 'storage.use'
@@ -7063,7 +7436,9 @@ function MZInventoryService.moveInventoryItem(source, request)
   end
 
   local actorPlayer = fromCtx.player or toCtx.player
-  local ok, resultOrErr = moveBetweenContexts(actorPlayer, fromCtx, toCtx, fromSlot, toSlot, amount)
+  local ok, resultOrErr = moveBetweenContexts(actorPlayer, fromCtx, toCtx, fromSlot, toSlot, amount, {
+    rotated = request.rotated
+  })
   if not ok then
     return buildPublicInventoryError(resultOrErr, {
       from = {
@@ -7226,13 +7601,29 @@ function MZInventoryService.useInventoryItemAction(source, request)
     return buildPublicInventoryError(normalizeErr)
   end
 
-  if normalized.type ~= 'player' then
+  if normalized.type ~= 'player' and normalized.type ~= 'backpack' then
     return buildPublicInventoryError('invalid_target', {
       container = normalized
     })
   end
 
-  local ok, resultOrErr = MZInventoryService.usePlayerItem(source, request.slot)
+  local ok, resultOrErr
+  if normalized.type == 'backpack' then
+    if not playerActionAllowed(source, 'inventory.use') then return buildPublicInventoryError('player_state_blocked') end
+    local ctx, ctxErr = resolvePublicContainerContext(source, normalized)
+    if not ctx then return buildPublicInventoryError(ctxErr) end
+    ok, resultOrErr = executeInventoryMutation(ctx.player, { ctx, ctx.equipment }, 'use_backpack_item', function()
+      local current = MZInventoryService.getEquippedBackpackContext(source)
+      if not current or current.ownerId ~= ctx.ownerId or current.equipment.ownerId ~= ctx.equipment.ownerId
+        or current.maxSlots ~= ctx.maxSlots or current.maxWeight ~= ctx.maxWeight then return false, 'backpack_changed' end
+      local row = findRowBySlot(getInventoryRowsFromContext(ctx), tonumber(request.slot))
+      local def = row and getItemDefinition(row.item)
+      if def and (def.type == 'weapon' or def.type == 'ammo') then return false, 'item_not_usable' end
+      return buildUsePlayerItemMutationPlan(ctx, source, request.slot, request.instance_uid)
+    end)
+  else
+    ok, resultOrErr = MZInventoryService.usePlayerItem(source, request.slot)
+  end
   if not ok then
     return buildPublicInventoryError(resultOrErr, {
       container = normalized,
@@ -7263,7 +7654,7 @@ function MZInventoryService.getPlayerHotbar(source)
   }
 end
 
-function MZInventoryService.bindHotbarSlot(source, hotbarSlot, inventorySlot)
+function MZInventoryService.bindHotbarSlot(source, hotbarSlot, inventorySlot, container, expectedInstanceUid)
   if MZInventoryRestraintRuntime and MZInventoryRestraintRuntime.publicBlocked
     and MZInventoryRestraintRuntime.publicBlocked(source) then
     return false, 'inventory_restricted'
@@ -7282,6 +7673,41 @@ function MZInventoryService.bindHotbarSlot(source, hotbarSlot, inventorySlot)
   inventorySlot = tonumber(inventorySlot)
   if not inventorySlot then
     return false, 'invalid_slot'
+  end
+
+  if container ~= nil and (type(container) ~= 'table' or (container.type ~= 'player' and container.type ~= 'backpack')) then
+    return false, 'invalid_container'
+  end
+
+  if type(container) == 'table' and container.type == 'backpack' then
+    local ctx, ctxErr = resolvePublicContainerContext(source, container)
+    if not ctx then return false, ctxErr end
+    return executeInventoryMutation(player, { ctx, ctx.equipment }, 'bind_backpack_hotbar', function()
+      local current = MZInventoryService.getEquippedBackpackContext(source)
+      if not current or current.ownerId ~= ctx.ownerId or current.equipment.ownerId ~= ctx.equipment.ownerId then
+        return false, 'backpack_changed'
+      end
+      if not isValidSlotNumber(inventorySlot, ctx.maxSlots) then return false, 'invalid_slot' end
+      local row = findRowBySlot(getInventoryRowsFromContext(ctx), inventorySlot)
+      local definition = row and getItemDefinition(row.item)
+      if not row then return false, 'slot_empty' end
+      if not definition or definition.usable ~= true then return false, 'item_not_usable' end
+      if definition.type == 'weapon' or definition.type == 'ammo' or MZInventoryMoneyRules.isItem(row.item) then
+        return false, 'item_not_hotbar_eligible'
+      end
+      local uid = trimString(row.instance_uid)
+      if uid ~= trimString(expectedInstanceUid) then return false, 'hotbar_item_moved' end
+      local assignUid = uid == ''
+      if assignUid then uid = MZUtils.generateInstanceUid('MZINV') end
+      local saved, saveErr = MZInventoryRepository.setPlayerHotbarSlot(
+        player.citizenid, hotbarSlot, uid, ctx.ownerId, assignUid and inventorySlot or nil
+      )
+      if not saved then return false, saveErr or 'hotbar_save_failed' end
+      return { logAction = 'inventory_hotbar_bind', logTargetCtx = ctx,
+        logPayload = { meta = { hotbar_slot = hotbarSlot, instance_uid = uid, backpack_uid = ctx.ownerId, item = row.item } },
+        result = { hotbar_slot = hotbarSlot, instance_uid = uid, inventory_slot = inventorySlot,
+          backpack_uid = ctx.ownerId, item = tostring(row.item) } }
+    end)
   end
 
   local ctx, ctxErr = getPlayerInventoryContext(source)
@@ -7406,10 +7832,11 @@ function MZInventoryService.useHotbarSlot(source, hotbarSlot)
   end
 
   local hotbar = MZInventoryRepository.getPlayerHotbar(player.citizenid)
-  local instanceUid = ''
+  local instanceUid, backpackUid = '', ''
   for _, entry in ipairs(hotbar) do
     if tonumber(entry.hotbar_slot) == hotbarSlot then
       instanceUid = tostring(entry.instance_uid or ''):gsub('^%s+', ''):gsub('%s+$', '')
+      backpackUid = trimString(entry.backpack_uid)
       break
     end
   end
@@ -7419,6 +7846,21 @@ function MZInventoryService.useHotbarSlot(source, hotbarSlot)
   end
 
   local row = MZInventoryRepository.getByInstanceUid(instanceUid)
+  if backpackUid ~= '' then
+    local bag = MZInventoryService.getEquippedBackpackContext(source)
+    if not bag or bag.ownerId ~= backpackUid or not row or row.owner_type ~= 'item_instance'
+      or tostring(row.owner_id) ~= backpackUid or row.inventory_type ~= 'backpack' then
+      return false, 'hotbar_item_missing'
+    end
+    local response = MZInventoryService.useInventoryItemAction(source, {
+      container = { type = 'backpack', instance_uid = backpackUid }, slot = row.slot, instance_uid = instanceUid
+    })
+    if not response.ok then return false, response.error and response.error.internal_code or 'use_failed' end
+    logHotbarAction('inventory_hotbar_use', source, player, hotbarSlot, instanceUid,
+      { item = row.item, inventory_slot = row.slot })
+    return true, { hotbar_slot = hotbarSlot, instance_uid = instanceUid, backpack_uid = backpackUid,
+      inventory_slot = tonumber(row.slot), item = tostring(row.item), result = response.data and response.data.result }
+  end
   if not isPlayerMainInventoryRow(row, player.citizenid) then
     cleanupInvalidHotbarRefsForPlayer(source, 'hotbar_use_missing_item')
     return false, 'hotbar_item_missing'
@@ -7810,7 +8252,7 @@ MZInventoryService.grantRestraintItem = function(source, itemName, metadata, ope
     if not carryOk then return false, carryError end
 
     local usedSlots = buildUsedSlotLookup(rows)
-    local slot = findFreeSlotInRows(rows, ctx.maxSlots, usedSlots)
+    local slot = findFreeSlotInRows(rows, ctx.maxSlots, usedSlots, itemName, normalized)
     if not slot then return false, 'no_free_slot' end
 
     local finalMetadata = normalizeMetadataTable(normalized)

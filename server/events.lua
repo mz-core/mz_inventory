@@ -2,6 +2,21 @@ lib.callback.register('mz_inventory:server:openPlayer', function(source)
   return MZInventoryService.openPlayerInventory(source)
 end)
 
+lib.callback.register('mz_inventory:server:getWorldDrops', function()
+  local ok, drops = MZInventoryService.listWorldDrops()
+  local result = {}
+  if ok and type(drops) == 'table' then
+    for _, drop in ipairs(drops) do
+      result[#result + 1] = {
+        drop_uid = drop.drop_uid, label = drop.label,
+        x = drop.x, y = drop.y, z = drop.z,
+        metadata = drop.metadata, prop_model = drop.prop_model
+      }
+    end
+  end
+  return { ok = ok == true, drops = result }
+end)
+
 lib.callback.register('mz_inventory:server:openContainer', function(source, descriptor)
   return MZInventoryService.openInventoryContainer(source, descriptor)
 end)
@@ -114,7 +129,9 @@ lib.callback.register('mz_inventory:server:bindHotbarSlot', function(source, pay
   return buildHotbarCallbackResponse(MZInventoryService.bindHotbarSlot(
     source,
     payload.hotbar_slot or payload.hotbarSlot,
-    payload.inventory_slot or payload.inventorySlot or payload.slot
+    payload.inventory_slot or payload.inventorySlot or payload.slot,
+    payload.container,
+    payload.instance_uid
   ))
 end)
 

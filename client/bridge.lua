@@ -180,13 +180,14 @@ end
 local function shouldFallbackToPlayerView(currentView, errorData)
   local targetDescriptor = type(currentView) == 'table' and currentView.target or nil
   local targetType = type(targetDescriptor) == 'table' and tostring(targetDescriptor.type or '') or ''
-  if targetType ~= 'drop' then
+  if targetType ~= 'drop' and targetType ~= 'ground_backpack' then
     return false
   end
 
   local publicCode = tostring(type(errorData) == 'table' and errorData.code or '')
   local internalCode = tostring(type(errorData) == 'table' and errorData.internal_code or '')
   return publicCode == 'container_not_found' or internalCode == 'drop_not_found'
+    or (targetType == 'ground_backpack' and (internalCode == 'backpack_not_accessible' or internalCode == 'inventory_access_denied'))
 end
 
 local function getGroundDropCoords()
@@ -467,7 +468,7 @@ function MZInventoryBridge.getHotbar()
   return true, hotbar
 end
 
-function MZInventoryBridge.bindHotbarSlot(inventorySlot, hotbarSlot)
+function MZInventoryBridge.bindHotbarSlot(inventorySlot, hotbarSlot, containerKey)
   inventorySlot = tonumber(inventorySlot)
   hotbarSlot = tonumber(hotbarSlot)
 
@@ -475,9 +476,12 @@ function MZInventoryBridge.bindHotbarSlot(inventorySlot, hotbarSlot)
     return false, buildFallbackError('invalid_slot', 'Atalho invalido.', 'invalid_hotbar_bind')
   end
 
+  local selected = MZInventoryState.getSlot(containerKey or 'player', inventorySlot)
   local ok, dataOrError = callInventoryCallback(CALLBACKS.bindHotbar, {
     inventorySlot = math.floor(inventorySlot),
-    hotbarSlot = math.floor(hotbarSlot)
+    hotbarSlot = math.floor(hotbarSlot),
+    container = MZInventoryState.getContainerDescriptor(containerKey or 'player'),
+    instance_uid = selected and selected.instance_uid
   })
 
   if not ok then
@@ -599,7 +603,7 @@ function MZInventoryBridge.useItem(containerKey, slotNumber)
     return false, pushInventoryError(buildFallbackError('invalid_slot', 'Slot invalido para uso.', 'invalid_slot'))
   end
 
-  if tostring(containerKey or '') ~= 'player' then
+  if tostring(containerKey or '') ~= 'player' and tostring(containerKey or '') ~= 'backpack' then
     return false, pushInventoryError(buildFallbackError('invalid_target', 'Apenas itens do jogador podem ser usados aqui.', 'invalid_target'))
   end
 
@@ -623,7 +627,7 @@ function MZInventoryBridge.useItem(containerKey, slotNumber)
   end
 
   return performActionAndRefresh('use', CALLBACKS.use, {
-    container = { type = 'player' },
+    container = MZInventoryState.getContainerDescriptor(containerKey),
     slot = tonumber(slotNumber) or slotNumber
   }, 'Usando item...')
 end
@@ -714,7 +718,7 @@ function MZInventoryBridge.giveItem(containerKey, slotNumber, amount)
   return true, resultOrErr
 end
 
-function MZInventoryBridge.moveItem(fromContainerKey, fromSlot, toContainerKey, toSlot, amount)
+function MZInventoryBridge.moveItem(fromContainerKey, fromSlot, toContainerKey, toSlot, amount, rotated)
   if MZInventoryThirdParty and MZInventoryThirdParty.isActive()
     and (fromContainerKey == 'target' or toContainerKey == 'target') then
     if fromContainerKey ~= 'target' or toContainerKey ~= 'player'
@@ -738,6 +742,7 @@ function MZInventoryBridge.moveItem(fromContainerKey, fromSlot, toContainerKey, 
   end
 
   return performActionAndRefresh('move', CALLBACKS.move, {
+    rotated = rotated,
     from = {
       container = fromDescriptor,
       slot = tonumber(fromSlot) or fromSlot

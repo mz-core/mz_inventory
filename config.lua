@@ -3,8 +3,16 @@ Config = Config or {}
 Config.Debug = false
 
 Config.Inventory = {
+  gridColumns = 8,
   nuiBuild = '20261011inventorysubmenu1',
-  defaultSlots = 40,
+  defaultSlots = 48,
+  worldDropSlots = 48,
+  worldDropPresentation = {
+    prop_model = 'bkr_prop_duffel_bag_01a',
+    fallback_prop_model = 'prop_cs_heist_bag_02',
+    stream_distance = 120.0,
+    heading_offset = 0.0
+  },
   defaultWeight = 50000,
   playerTransferDistance = 3.0,
   hotbarSlots = 5,
@@ -32,10 +40,11 @@ Config.Inventory = {
     { id = 'melee', label = 'Branca', slot = 17, kind = 'weapon', hotkey = 3, weaponCategory = 'melee', placeholderIcon = 'pocket-knife.svg' },
     { id = 'special', label = 'Especial', slot = 18, kind = 'weapon', hotkey = 4, weaponCategory = 'special', placeholderIcon = 'zap.svg' }
   },
+  backpackDefaultCapacity = 'backpack_small',
   backpackCapacities = {
-    backpack_small = { extraSlots = 10, extraWeight = 10000 },
-    backpack_medium = { extraSlots = 20, extraWeight = 20000 },
-    backpack_large = { extraSlots = 30, extraWeight = 30000 }
+    backpack_small = { extraSlots = 48, extraWeight = 10000 },
+    backpack_medium = { extraSlots = 56, extraWeight = 20000 },
+    backpack_large = { extraSlots = 64, extraWeight = 30000 }
   },
   medicalReservation = {
     writers = { 'mz_medical' },
@@ -69,7 +78,7 @@ Config.Inventory = {
   },
   personalStash = { slots = 40, weight = 75000 },
   orgStash = { slots = 80, weight = 200000 },
-  trunk = { slots = 30, weight = 120000 },
+  trunk = { slots = 32, weight = 120000 },
   glovebox = { slots = 8, weight = 15000 }
 }
 

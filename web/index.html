@@ -76,12 +76,20 @@
               <div class="pane-header">
                 <div class="pane-heading">
                   <p class="pane-label">Inventario</p>
-                  <h2 id="player-name">Mochila</h2>
+                  <h2 id="player-name">Bolsos</h2>
                 </div>
                 <div id="player-stats" class="pane-stats"></div>
               </div>
 
               <div id="player-grid" class="slot-grid"></div>
+
+              <section id="backpack-section" class="backpack-section is-hidden">
+                <div class="pane-header">
+                  <div class="pane-heading"><p class="pane-label">Equipamento</p><h2 id="backpack-name">Mochila</h2></div>
+                  <div id="backpack-stats" class="pane-stats"></div>
+                </div>
+                <div id="backpack-grid" class="slot-grid"></div>
+              </section>
 
               <aside id="player-summary" class="player-summary" aria-label="Resumo financeiro do jogador">
                 <div class="player-summary-identity">
@@ -115,12 +123,12 @@
             <div id="equipment-grid" class="equipment-grid"></div>
           </section>
 
-          <aside class="right-region" aria-label="Container e contexto do item">
+          <aside class="right-region" aria-label="Chão, recipiente e contexto do item">
             <section id="target-pane" class="inventory-pane target-pane">
               <div class="pane-frame">
                 <div class="pane-header">
                   <div class="pane-heading">
-                    <p class="pane-label">Container</p>
+                    <p id="target-label" class="pane-label">Chão</p>
                     <h2 id="target-name">Drop</h2>
                   </div>
                   <div id="target-stats" class="pane-stats"></div>

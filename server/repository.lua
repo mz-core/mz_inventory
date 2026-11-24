@@ -71,14 +71,14 @@ function MZInventoryRepository.getPlayerHotbar(citizenid)
   end
 
   return MySQL.query.await([[
-    SELECT citizenid, hotbar_slot, instance_uid, created_at, updated_at
+    SELECT citizenid, hotbar_slot, instance_uid, backpack_uid, created_at, updated_at
     FROM mz_player_hotbar
     WHERE citizenid = ?
     ORDER BY hotbar_slot ASC
   ]], { citizenid }) or {}
 end
 
-function MZInventoryRepository.setPlayerHotbarSlot(citizenid, hotbarSlot, instanceUid)
+function MZInventoryRepository.setPlayerHotbarSlot(citizenid, hotbarSlot, instanceUid, backpackUid, assignSlot)
   if not writerReady() then return false, 'inventory_schema_unavailable' end
   citizenid = tostring(citizenid or ''):gsub('^%s+', ''):gsub('%s+$', '')
   hotbarSlot = tonumber(hotbarSlot)
@@ -88,25 +88,36 @@ function MZInventoryRepository.setPlayerHotbarSlot(citizenid, hotbarSlot, instan
     return false, 'invalid_hotbar_bind'
   end
 
-  local ok = MySQL.transaction.await({
+  local statements = {}
+  if assignSlot then
+    statements[#statements + 1] = {
+      query = [[UPDATE mz_inventory_items SET instance_uid = ?
+        WHERE owner_type = 'item_instance' AND owner_id = ? AND inventory_type = 'backpack'
+          AND slot = ? AND (instance_uid IS NULL OR instance_uid = '')]],
+      parameters = { instanceUid, backpackUid, assignSlot }
+    }
+  end
+  statements[#statements + 1] =
     {
       query = [[
         DELETE FROM mz_player_hotbar
         WHERE citizenid = ? AND instance_uid = ? AND hotbar_slot <> ?
       ]],
       parameters = { citizenid, instanceUid, hotbarSlot }
-    },
+    }
+  statements[#statements + 1] =
     {
       query = [[
-        INSERT INTO mz_player_hotbar (citizenid, hotbar_slot, instance_uid)
-        VALUES (?, ?, ?)
+        INSERT INTO mz_player_hotbar (citizenid, hotbar_slot, instance_uid, backpack_uid)
+        VALUES (?, ?, ?, NULLIF(?, ''))
         ON DUPLICATE KEY UPDATE
           instance_uid = VALUES(instance_uid),
+          backpack_uid = VALUES(backpack_uid),
           updated_at = CURRENT_TIMESTAMP
       ]],
-      parameters = { citizenid, hotbarSlot, instanceUid }
+      parameters = { citizenid, hotbarSlot, instanceUid, tostring(backpackUid or '') }
     }
-  })
+  local ok = MySQL.transaction.await(statements)
 
   if ok == false then
     return false, 'hotbar_save_failed'
@@ -155,9 +166,11 @@ function MZInventoryRepository.clearInvalidPlayerHotbarRefs(citizenid)
     FROM mz_player_hotbar hb
     LEFT JOIN mz_inventory_items ii
       ON ii.instance_uid = hb.instance_uid
-      AND ii.owner_type = 'character'
-      AND ii.owner_id = hb.citizenid
-      AND ii.inventory_type = 'main'
+      AND (
+        (hb.backpack_uid IS NULL AND ii.owner_type = 'character' AND ii.owner_id = hb.citizenid AND ii.inventory_type = 'main')
+        OR (hb.backpack_uid IS NOT NULL AND ii.owner_type = 'item_instance'
+          AND ii.owner_id = hb.backpack_uid AND ii.inventory_type = 'backpack')
+      )
     WHERE hb.citizenid = ? AND ii.id IS NULL
   ]], { citizenid }) or 0
 end
@@ -263,6 +276,17 @@ function MZInventoryRepository.buildDeleteSlotStatement(ownerType, ownerId, inve
       WHERE owner_type = ? AND owner_id = ? AND inventory_type = ? AND slot = ?
     ]],
     parameters = { ownerType, ownerId, inventoryType, slot }
+  }
+end
+
+function MZInventoryRepository.buildRelocateSlotStatement(rowId, ownerType, ownerId, inventoryType, slot)
+  return {
+    query = [[
+      UPDATE mz_inventory_items
+      SET owner_type = ?, owner_id = ?, inventory_type = ?, slot = ?
+      WHERE id = ?
+    ]],
+    parameters = { ownerType, ownerId, inventoryType, slot, rowId }
   }
 end
 

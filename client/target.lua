@@ -51,12 +51,11 @@ local function playerDistance(entity)
   return getDistance(GetEntityCoords(ped), GetEntityCoords(entity))
 end
 
--- The lookup is read-only and only succeeds for the exact prop that mz_target
+-- The lookup is read-only and only succeeds for the exact prop that inventory
 -- created for a real drop record. A map prop with the same model returns nil.
 local function dropUidFor(entity)
-  if not targetStarted() then return nil end
   local ok, dropUid = pcall(function()
-    return exports['mz_target']:GetWorldDropByEntity(entity)
+    return MZInventoryDrops.GetDropUid(entity)
   end)
   if not ok or type(dropUid) ~= 'string' or dropUid == '' then return nil end
   return dropUid
@@ -80,6 +79,18 @@ local function openBag(entity)
     })
   end)
   return ok and opened ~= false
+end
+
+local function groundBackpackUid(entity)
+  if not bagCanInteract(entity) then return nil end
+  local ok, uid = pcall(function() return MZInventoryDrops.GetBackpackUid(entity) end)
+  return ok and type(uid) == 'string' and uid ~= '' and uid or nil
+end
+
+local function openGroundBackpack(entity)
+  local uid, dropUid = groundBackpackUid(entity), dropUidFor(entity)
+  if not uid or not dropUid then return false end
+  return MZInventoryBridge.openTargetView({ type = 'ground_backpack', drop_uid = dropUid, instance_uid = uid })
 end
 
 local function vehiclePlate(entity)
@@ -112,10 +123,14 @@ end
 local function getBagModels()
   if not targetStarted() then return {} end
   local ok, models = pcall(function()
-    return exports['mz_target']:GetWorldDropModels()
+    return MZInventoryDrops.GetModels()
   end)
-  if ok and type(models) == 'table' and #models > 0 then return models end
-  return FALLBACK_BAG_MODELS
+  if not ok or type(models) ~= 'table' or #models == 0 then models = FALLBACK_BAG_MODELS end
+  local attachments = type(Config) == 'table' and Config.Weapons and Config.Weapons.bodyAttachments
+  for _, item in pairs(type(attachments) == 'table' and attachments.items or {}) do
+    if type(item) == 'table' and type(item.model) == 'string' then models[#models + 1] = item.model end
+  end
+  return models
 end
 
 local function removeTargetOptions()
@@ -128,6 +143,7 @@ local function removeTargetOptions()
   pcall(function()
     exports['mz_target']:RemoveTargetModel(bagModels, bagLabel)
   end)
+  pcall(function() exports['mz_target']:RemoveTargetModel(bagModels, 'Abrir mochila') end)
   pcall(function()
     exports['mz_target']:RemoveTargetBone('boot', trunkLabel)
   end)
@@ -153,6 +169,13 @@ local function registerTarget()
           distance = BAG_OPEN_DISTANCE,
           canInteract = bagCanInteract,
           action = openBag
+        },
+        {
+          label = 'Abrir mochila',
+          icon = 'backpack',
+          distance = BAG_OPEN_DISTANCE,
+          canInteract = function(entity) return groundBackpackUid(entity) ~= nil end,
+          action = openGroundBackpack
         }
       }
     })

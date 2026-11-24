@@ -30,6 +30,7 @@ local statements = {
     citizenid VARCHAR(32) NOT NULL,
     hotbar_slot INT NOT NULL,
     instance_uid VARCHAR(64) NOT NULL,
+    backpack_uid VARCHAR(64) NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     UNIQUE KEY uq_mz_player_hotbar_slot (citizenid, hotbar_slot),
@@ -89,6 +90,23 @@ function MZInventorySchema.prepare()
     if not ok then
       status.error = ('statement_%s_failed:%s'):format(index, tostring(err))
       print(('[mz_inventory][schema][ERROR] %s'):format(status.error))
+      return false, status.error
+    end
+  end
+
+  local okColumn, columns = pcall(function()
+    return MySQL.query.await("SHOW COLUMNS FROM mz_player_hotbar LIKE 'backpack_uid'")
+  end)
+  if not okColumn or type(columns) ~= 'table' then
+    status.error = 'hotbar_backpack_column_check_failed'
+    return false, status.error
+  end
+  if #columns == 0 then
+    local okAlter, alterErr = pcall(function()
+      MySQL.query.await('ALTER TABLE mz_player_hotbar ADD COLUMN backpack_uid VARCHAR(64) NULL')
+    end)
+    if not okAlter then
+      status.error = 'hotbar_backpack_column_failed:' .. tostring(alterErr)
       return false, status.error
     end
   end

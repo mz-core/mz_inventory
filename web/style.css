@@ -1,3 +1,19 @@
+@font-face {
+  font-family: 'MZ Rajdhani';
+  src: url('./assets/fonts/Rajdhani-Medium.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'MZ Geist';
+  src: url('./assets/fonts/Geist-Latin.woff2') format('woff2');
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
 :root {
   --inv-bg: rgba(7, 10, 9, 0.96);
   --inv-surface: rgba(13, 18, 16, 0.94);
@@ -39,6 +55,7 @@ body,
 .app,
 .shell,
 .workspace {
+  --inv-storage-overhang: clamp(20px, 1.7vw, 36px);
   background-color: transparent;
   background-image: none;
 }
@@ -108,6 +125,7 @@ body.nui-closed {
   inset: 0;
   z-index: 1;
   display: grid;
+  grid-template-rows: minmax(0, 1fr);
   place-items: center;
   padding: 28px;
   pointer-events: none;
@@ -143,7 +161,9 @@ body.nui-closed {
 
 .player-pane {
   grid-column: 1;
+  width: clamp(300px, 26.6vw, 550px);
   height: 100%;
+  min-height: 0;
 }
 
 .equipment-pane {
@@ -156,6 +176,8 @@ body.nui-closed {
 
 .right-region {
   grid-column: 3;
+  justify-self: end;
+  width: clamp(300px, 26.6vw, 550px);
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -246,6 +268,108 @@ body.nui-closed {
   align-self: flex-end;
 }
 
+.inventory-pane .pane-header {
+  min-height: 38px;
+  align-items: flex-end;
+  column-gap: 12px;
+  padding: 8px 10px 7px;
+  border-bottom: 1px solid rgba(190, 205, 219, 0.1);
+  background: transparent;
+}
+
+.inventory-pane {
+  --storage-accent: #55d7a2;
+  font-family: 'MZ Geist', 'Segoe UI', sans-serif;
+}
+
+.target-pane {
+  --storage-accent: #f1bb55;
+}
+
+.target-pane[data-storage-kind='world'] {
+  --storage-accent: #f1bb55;
+}
+
+.inventory-pane .pane-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.inventory-pane .pane-heading::before {
+  content: '';
+  width: 4px;
+  height: 14px;
+  flex: 0 0 auto;
+  background: var(--storage-accent);
+  border-radius: 2px;
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.16);
+}
+
+.inventory-pane .pane-metric-row {
+  margin-bottom: 5px;
+  color: rgba(245, 247, 246, 0.85);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95), 0 0 2px rgba(0, 0, 0, 0.9);
+  font-size: 0.61rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.inventory-pane .pane-frame {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.inventory-pane.player-pane .pane-frame {
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.player-pane .pane-frame > .pane-header,
+.player-pane .pane-frame > .slot-grid {
+  border-radius: 0;
+}
+
+.player-pane .pane-frame > .pane-header {
+  border: 0;
+  border-bottom: 1px solid rgba(190, 205, 219, 0.1);
+}
+
+.player-pane .pane-frame > .slot-grid {
+  flex: 0 1 auto;
+  border: 0;
+}
+
+.inventory-pane .pane-label {
+  display: none;
+}
+
+.inventory-pane .pane-heading h2 {
+  font-family: 'MZ Rajdhani', 'Arial Narrow', sans-serif;
+  font-size: 1.16rem;
+  font-weight: 700;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95), 0 0 9px rgba(255, 255, 255, 0.16);
+}
+
+.inventory-pane .pane-weight-bar {
+  height: 3px;
+  background: rgba(218, 231, 233, 0.1);
+}
+
+.inventory-pane .pane-weight-fill {
+  box-shadow: none;
+}
+
+.inventory-pane .pane-weight-fill:not(.warning):not(.danger) {
+  background: var(--storage-accent);
+}
+
 .pane-metrics {
   width: 100%;
 }
@@ -292,11 +416,21 @@ body.nui-closed {
 }
 
 .slot-grid {
+  --inv-grid-gap: 1px;
+  --inv-grid-padding-x: 4px;
+  --inv-grid-border: 1px;
+  --inv-grid-radius: 1px;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 6px;
-  padding: 10px 12px 12px;
+  grid-template-columns: repeat(var(--inv-grid-columns, 8), minmax(0, 1fr));
+  grid-auto-rows: var(--inv-grid-cell, max-content);
+  align-content: start;
+  gap: var(--inv-grid-gap);
+  padding: 4px var(--inv-grid-padding-x);
   overflow-y: auto;
+  background: linear-gradient(180deg, rgba(21, 27, 32, 0.91), rgba(10, 14, 18, 0.92));
+  border: 1px solid rgba(194, 211, 216, 0.13);
+  border-radius: 3px;
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.04), 0 3px 12px rgba(0, 0, 0, 0.16);
 }
 
 .player-pane .slot-grid {
@@ -304,8 +438,30 @@ body.nui-closed {
   min-height: 0;
 }
 
-.target-pane .slot-grid {
-  overflow: visible;
+.backpack-section {
+  display: flex;
+  flex: 0 1 auto;
+  max-height: 48%;
+  min-height: 0;
+  flex-direction: column;
+  margin-top: 12px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.backpack-section .pane-header {
+  border-top: 1px solid rgba(190, 205, 219, 0.14);
+}
+
+.backpack-section .slot-grid {
+  flex: 0 1 auto;
+}
+
+#target-grid {
+  max-height: var(--target-grid-height, none);
+  overflow-y: auto;
 }
 
 .target-equipment-section {
@@ -348,6 +504,137 @@ body.nui-closed {
 .slot-card.empty {
   border-color: rgba(255, 255, 255, 0.055);
   background: var(--inv-slot-empty);
+}
+
+.slot-grid .slot-card {
+  border-width: var(--inv-grid-border);
+  border-radius: var(--inv-grid-radius);
+  border-color: rgba(176, 192, 205, 0.11);
+  background: rgba(16, 21, 28, 0.68);
+}
+
+.slot-grid .slot-card::before,
+.slot-grid .slot-glow,
+.slot-grid .slot-empty-mark,
+.slot-grid .slot-card.empty .slot-index {
+  display: none;
+}
+
+.slot-grid .slot-card.empty {
+  background: linear-gradient(150deg, rgba(34, 40, 43, 0.74), rgba(17, 22, 25, 0.88));
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.035);
+}
+
+.slot-grid .slot-card.occupied {
+  background: linear-gradient(150deg, rgba(42, 50, 51, 0.91), rgba(24, 31, 33, 0.95));
+  border-color: rgba(176, 201, 209, 0.2);
+}
+
+.slot-grid .slot-card:hover {
+  border-color: rgba(177, 207, 202, 0.38);
+  background: rgba(48, 61, 65, 0.86);
+}
+
+.slot-grid .slot-card.selected {
+  border-color: #8abeb2;
+  background: rgba(42, 67, 64, 0.9);
+  box-shadow: inset 0 0 0 1px rgba(138, 190, 178, 0.18);
+}
+
+.target-pane .slot-grid .slot-card.selected {
+  border-color: var(--storage-accent);
+  background: rgba(91, 69, 33, 0.82);
+  box-shadow: inset 0 0 0 1px rgba(241, 187, 85, 0.2);
+}
+
+.target-pane .spatial-preview.valid {
+  border-color: var(--storage-accent);
+  background: rgba(241, 187, 85, 0.12);
+}
+
+.slot-grid .slot-card.drop-target,
+.slot-grid .slot-card.split-source,
+.slot-grid .slot-card.split-target {
+  border-color: rgba(138, 190, 178, 0.8);
+  background: rgba(42, 67, 64, 0.72);
+  box-shadow: none;
+}
+
+.slot-grid .slot-card.occupied .slot-bottom {
+  position: absolute;
+  inset: auto 0 0;
+  z-index: 3;
+  display: block;
+  padding: 9px 5px 4px;
+  background: linear-gradient(transparent, rgba(9, 14, 16, 0.8));
+  pointer-events: none;
+}
+
+.slot-grid .slot-name {
+  overflow: hidden;
+  color: rgba(241, 246, 245, 0.92);
+  font-size: 0.55rem;
+  font-weight: 600;
+  line-height: 1.05;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slot-grid .slot-meta-row {
+  display: none;
+}
+
+.slot-grid .slot-stage {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  padding: 5px 5px 15px;
+}
+
+.slot-grid .slot-image {
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  max-height: 100%;
+  filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.32));
+}
+
+.spatial-grid .spatial-item {
+  aspect-ratio: auto;
+  height: 100%;
+  z-index: 1;
+}
+
+.spatial-grid .spatial-item .slot-stage {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  padding: 1px 3px 12px;
+}
+
+.spatial-grid .spatial-item .slot-image {
+  min-width: 0;
+  min-height: 0;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.spatial-grid .spatial-covered {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.spatial-preview {
+  z-index: 3;
+  pointer-events: none;
+  border: var(--inv-grid-border) solid #8abeb2;
+  background: rgba(138, 190, 178, 0.13);
+  border-radius: var(--inv-grid-radius);
+}
+
+.spatial-preview.invalid {
+  border-color: var(--inv-danger);
+  background: rgba(251, 113, 133, 0.18);
 }
 
 .slot-card.selected {
@@ -528,12 +815,12 @@ body.inventory-dragging .slot-card {
   align-items: center;
   gap: 12px;
   padding: 12px 14px;
-  border-top: 1px solid rgba(52, 211, 153, 0.2);
-  background: linear-gradient(
-    90deg,
-    rgba(52, 211, 153, 0.045),
-    transparent 42%
-  );
+  margin-top: auto;
+  border: 0;
+  border-top: 1px solid rgba(190, 205, 219, 0.1);
+  border-radius: 0;
+  background: transparent;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
   pointer-events: none;
 }
 
@@ -796,6 +1083,7 @@ body.inventory-dragging .slot-card {
 
 .action-rail.has-selection {
   animation: context-panel-enter 150ms ease-out;
+  margin-top: var(--context-offset, auto);
 }
 
 @keyframes context-panel-enter {
@@ -813,6 +1101,30 @@ body.inventory-dragging .slot-card {
 .rail-card {
   width: 100%;
   padding: 13px;
+}
+
+.selection-card {
+  min-height: var(--context-height, 0px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(194, 211, 216, 0.13);
+  border-radius: 3px;
+  background: linear-gradient(180deg, rgba(21, 27, 32, 0.95), rgba(10, 14, 18, 0.96));
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.04), 0 3px 12px rgba(0, 0, 0, 0.16);
+  font-family: 'MZ Geist', 'Segoe UI', sans-serif;
+}
+
+.selection-card .pane-label {
+  font-family: 'MZ Rajdhani', 'Arial Narrow', sans-serif;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--inv-text);
+  border-left: 4px solid var(--inv-green);
+  padding-left: 8px;
+}
+
+.action-rail[data-storage-kind='external'] .selection-card .pane-label {
+  border-left-color: var(--inv-amber);
 }
 
 .selection-card::before,
@@ -975,6 +1287,7 @@ body.inventory-dragging .slot-card {
 
 .selection-actions {
   display: grid;
+  margin-top: auto;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
 }
@@ -1440,8 +1753,10 @@ body.inventory-dragging .slot-card {
   }
 
   .slot-grid {
-    gap: 5px;
-    padding: 9px 10px 10px;
+    --inv-grid-gap: 1px;
+    --inv-grid-padding-x: 4px;
+    padding-top: 4px;
+    padding-bottom: 4px;
   }
 
   .player-summary {
@@ -1539,8 +1854,10 @@ body.inventory-dragging .slot-card {
   }
 
   .slot-grid {
-    gap: 4px;
-    padding: 7px 9px 8px;
+    --inv-grid-gap: 1px;
+    --inv-grid-padding-x: 4px;
+    padding-top: 4px;
+    padding-bottom: 4px;
   }
 
   .backpack-divider {

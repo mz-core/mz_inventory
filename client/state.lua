@@ -29,6 +29,7 @@ local function createDefaultSession()
     snapshots = {
       player = nil,
       equipment = nil,
+      backpack = nil,
       target = nil,
       targetEquipment = nil
     },
@@ -115,6 +116,7 @@ function MZInventoryState.applyView(viewData, context)
   session.context.target = cloneValue(context and context.target or nil)
   session.snapshots.player = cloneValue(viewData and viewData.player or nil)
   session.snapshots.equipment = cloneValue(viewData and viewData.equipment or nil)
+  session.snapshots.backpack = cloneValue(viewData and viewData.backpack or nil)
   session.snapshots.target = cloneValue(viewData and viewData.target or nil)
   session.snapshots.targetEquipment = cloneValue(viewData and viewData.targetEquipment or nil)
   session.profile = cloneValue(viewData and viewData.profile or nil)
@@ -168,6 +170,12 @@ function MZInventoryState.getContainerDescriptor(containerKey)
     return { type = 'equipment' }
   end
 
+  if containerKey == 'backpack' then
+    local snapshot = MZInventoryState.session.snapshots.backpack
+    local uid = snapshot and snapshot.container and snapshot.container.owner_id
+    return uid and { type = 'backpack', instance_uid = uid } or nil
+  end
+
   if containerKey == 'target' then
     return cloneValue(MZInventoryState.session.context.target)
   end
@@ -183,6 +191,10 @@ function MZInventoryState.getSnapshot(containerKey)
 
   if containerKey == 'equipment' then
     return MZInventoryState.session.snapshots.equipment
+  end
+
+  if containerKey == 'backpack' then
+    return MZInventoryState.session.snapshots.backpack
   end
 
   if containerKey == 'target' then
